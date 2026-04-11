@@ -1,0 +1,155 @@
+{
+    "source_file": "df_selected.xlsx",
+    "plot_folder": "serivce_rate_plot",
+    "procedure_duration_hours": {
+        "All": {
+            "distribution": "Gamma",
+            "parameters": {
+                "shape": 2.513292040557617,
+                "loc": 0.0,
+                "scale": 0.5153022898283387
+            },
+            "KS_D": 0.026385906642534818,
+            "KS_p_value": 0.07491954240525067,
+            "decision": "Fail to reject",
+            "n": 2346,
+            "mean_value": 1.295105143506678,
+            "inverse_mean_rate": 0.7721380808452049,
+            "time_unit": "hours"
+        }
+    },
+    "preparation_duration_days": {
+        "Angiography": {
+            "long prepare": {
+                "distribution": "Lognormal",
+                "parameters": {
+                    "sigma": 0.3637001798810022,
+                    "loc": 0.0,
+                    "scale": 55.93724857908451
+                },
+                "KS_D": 0.09357934850334115,
+                "KS_p_value": 0.2591092854462609,
+                "decision": "Fail to reject",
+                "n": 113,
+                "mean_value": 60.17916666666667,
+                "inverse_mean_rate": 0.016617046320016617,
+                "time_unit": "days"
+            },
+            "medium prepare": {
+                "distribution": "Gamma",
+                "parameters": {
+                    "shape": 6.257596650317461,
+                    "loc": 0.0,
+                    "scale": 2.4140278242660824
+                },
+                "KS_D": 0.07930430131309285,
+                "KS_p_value": 0.10763300446759405,
+                "decision": "Fail to reject",
+                "n": 228,
+                "mean_value": 15.106012426900586,
+                "inverse_mean_rate": 0.06619880692135625,
+                "time_unit": "days"
+            }
+        },
+        "Interventional": {
+            "long prepare": {
+                "distribution": "Lognormal",
+                "parameters": {
+                    "sigma": 0.5389232459002727,
+                    "loc": 0.0,
+                    "scale": 63.05133527456036
+                },
+                "KS_D": 0.1322619684059833,
+                "KS_p_value": 0.4955488324734919,
+                "decision": "Fail to reject",
+                "n": 37,
+                "mean_value": 73.62404279279279,
+                "inverse_mean_rate": 0.013582519542079426,
+                "time_unit": "days"
+            },
+            "medium prepare": {
+                "distribution": "Weibull",
+                "parameters": {
+                    "shape": 2.2554224877476434,
+                    "loc": 0.0,
+                    "scale": 16.1500589269885
+                },
+                "KS_D": 0.1421360852975266,
+                "KS_p_value": 0.11149865241882317,
+                "decision": "Fail to reject",
+                "n": 69,
+                "mean_value": 14.223480273752012,
+                "inverse_mean_rate": 0.07030628093501128,
+                "time_unit": "days"
+            }
+        }
+    },
+    "preparation_category_percentages": {
+        "Angiography": {
+            "long prepare": 6.460369163952226,
+            "medium prepare": 12.37785016286645,
+            "no_prepare_required": 36.53637350705755,
+            "short prepare": 44.62540716612378
+        },
+        "Interventional": {
+            "long prepare": 8.49802371541502,
+            "medium prepare": 13.636363636363637,
+            "no_prepare_required": 34.78260869565217,
+            "short prepare": 43.08300395256917
+        }
+    },
+    "preparation_empirical_fallback_groups": [
+        {
+            "classification": "Angiography",
+            "category_prepared": "no_prepare_required",
+            "reason": "All fitted candidate distributions were rejected by the KS p-value rule."
+        },
+        {
+            "classification": "Angiography",
+            "category_prepared": "short prepare",
+            "reason": "All fitted candidate distributions were rejected by the KS p-value rule."
+        },
+        {
+            "classification": "Interventional",
+            "category_prepared": "no_prepare_required",
+            "reason": "All fitted candidate distributions were rejected by the KS p-value rule."
+        },
+        {
+            "classification": "Interventional",
+            "category_prepared": "short prepare",
+            "reason": "All fitted candidate distributions were rejected by the KS p-value rule."
+        }
+    ],
+    "late_time_minutes": {
+        "classification=Angiography": {
+            "distribution": "Gamma",
+            "parameters": {
+                "shape": 1.357691412858344,
+                "loc": 0.0,
+                "scale": 38.70257907609817
+            },
+            "KS_D": 0.032650796979746155,
+            "KS_p_value": 0.09494150491083586,
+            "decision": "Fail to reject",
+            "n": 1419,
+            "mean_value": 52.5461592670895,
+            "inverse_mean_rate": 0.019030886632780332,
+            "time_unit": "minutes"
+        },
+        "classification=Interventional": {
+            "distribution": "Gamma",
+            "parameters": {
+                "shape": 1.7212548536519006,
+                "loc": 0.0,
+                "scale": 38.08462746632159
+            },
+            "KS_D": 0.03319887156192797,
+            "KS_p_value": 0.7530828692773016,
+            "decision": "Fail to reject",
+            "n": 403,
+            "mean_value": 65.55334987593052,
+            "inverse_mean_rate": 0.015254750548868197,
+            "time_unit": "minutes"
+        }
+    }
+}

@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -14,6 +15,8 @@ def preprocess_arrival_data(filepath="df_selected.xlsx"):
     df = pd.read_excel(filepath)
     df = df.copy()
     df["Ordered"] = pd.to_datetime(df["Ordered"])
+    df["ScanStartF"] = pd.to_datetime(df["ScanStartF"])
+    df["ScanStopF"] = pd.to_datetime(df["ScanStopF"])
     df["hour"] = df["Ordered"].dt.hour
     df["arrival_day"] = df["Ordered"].dt.floor("D")
 
@@ -65,7 +68,7 @@ def build_counts_by_day_bin(df_selected, classification, all_weekdays, bin_label
     subset = df_selected[df_selected["classification_norm"] == classification].copy()
 
     counts_by_day_bin = (
-        subset.groupby(["arrival_day", "time_bin"])
+        subset.groupby(["arrival_day", "time_bin"], observed=False)
         .size()
         .unstack(fill_value=0)
     )
@@ -135,6 +138,7 @@ def assess_nhpp_by_classification(
     start_hour=8,
     end_hour=17,
     make_plots=True,
+    plot_dir="arrival_rate_plot",
 ):
     df_selected, bin_labels = add_time_bins(df_no_weekend, start_hour, end_hour)
     all_weekdays = get_all_weekdays(df_no_weekend)
@@ -151,7 +155,7 @@ def assess_nhpp_by_classification(
         results[classification] = nhpp_result
 
         if make_plots:
-            plot_nhpp_diagnostics(classification, nhpp_result)
+            plot_nhpp_diagnostics(classification, nhpp_result, plot_dir=plot_dir)
 
     return results
 
@@ -309,6 +313,7 @@ def fit_arrival_models(
     n_sim_days=None,
     random_state=123,
     make_plots=True,
+    plot_dir="arrival_rate_plot",
 ):
     df_selected, bin_labels = add_time_bins(df_no_weekend, start_hour, end_hour)
     all_weekdays = get_all_weekdays(df_no_weekend)
@@ -395,7 +400,7 @@ def fit_arrival_models(
     }
 
     if make_plots:
-        plot_nonpoisson_diagnostics(target_class, results)
+        plot_nonpoisson_diagnostics(target_class, results, plot_dir=plot_dir)
 
     return results
 
@@ -411,6 +416,7 @@ def analyze_arrival_rates(
     end_hour=17,
     random_state=123,
     make_plots=True,
+    plot_dir="arrival_rate_plot",
 ):
     poisson_results = assess_nhpp_by_classification(
         df_no_weekend=df_no_weekend,
@@ -418,6 +424,7 @@ def analyze_arrival_rates(
         start_hour=start_hour,
         end_hour=end_hour,
         make_plots=make_plots,
+        plot_dir=plot_dir,
     )
 
     angiography_results = fit_arrival_models(
@@ -427,6 +434,7 @@ def analyze_arrival_rates(
         end_hour=end_hour,
         random_state=random_state,
         make_plots=make_plots,
+        plot_dir=plot_dir,
     )
 
     poisson_parameters = {
@@ -444,83 +452,107 @@ def analyze_arrival_rates(
 # =========================================================
 # PLOTTING
 # =========================================================
-def plot_nhpp_diagnostics(classification, result):
+def _sanitize_filename(text):
+    return (
+        str(text).strip().lower()
+        .replace(" ", "_")
+        .replace("/", "_")
+        .replace("\\", "_")
+        .replace(":", "")
+    )
+
+
+def _save_plot(fig, plot_dir, filename):
+    plot_dir = Path(plot_dir)
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    save_path = plot_dir / filename
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_nhpp_diagnostics(classification, result, plot_dir="arrival_rate_plot"):
+    class_tag = _sanitize_filename(classification)
+
     counts_by_day_bin = result["counts_by_day_bin"]
     mean_counts = counts_by_day_bin.mean(axis=0)
     cumulative_check = result["cumulative_check"]
     bin_check = result["bin_check"]
     days_in_each_bin = (counts_by_day_bin > 0).sum(axis=0)
 
-    plt.figure(figsize=(10, 6))
+    fig = plt.figure(figsize=(10, 6))
     plt.plot(mean_counts.index.astype(str), mean_counts.values, marker="o")
-    plt.title(f"Mean Number of Counts by Time Bin - {classification}")
+    plt.title(f"Mean Arrivals by Time Bin - {classification.title()}")
     plt.xlabel("Time Bin")
     plt.ylabel("Mean Count")
     plt.xticks(rotation=45)
     plt.tight_layout()
-    plt.show()
+    _save_plot(fig, plot_dir, f"{class_tag}_mean_arrivals_by_time_bin.png")
 
-    plt.figure(figsize=(10, 6))
+    fig = plt.figure(figsize=(10, 6))
     plt.plot(cumulative_check["t"], cumulative_check["V_over_Lambda"], marker="o")
     plt.axhline(y=1.0, linestyle="--")
-    plt.title(f"Cumulative Variance/Mean Ratio - {classification}")
+    plt.title(f"Cumulative Variance-to-Mean Ratio - {classification.title()}")
     plt.xlabel("Cumulative Time Bin")
     plt.ylabel("V(t) / Lambda_bar(t)")
     plt.xticks(rotation=45)
     plt.tight_layout()
-    plt.show()
+    _save_plot(fig, plot_dir, f"{class_tag}_cumulative_variance_to_mean_ratio.png")
 
-    plt.figure(figsize=(10, 6))
+    fig = plt.figure(figsize=(10, 6))
     plt.bar(days_in_each_bin.index.astype(str), days_in_each_bin.values, edgecolor="black")
-    plt.title(f"Number of Days with At Least One Arrival in Each Time Bin - {classification}")
+    plt.title(f"Days with At Least One Arrival by Time Bin - {classification.title()}")
     plt.xlabel("Time Bin")
     plt.ylabel("Number of Days")
     plt.xticks(rotation=45)
     plt.tight_layout()
-    plt.show()
+    _save_plot(fig, plot_dir, f"{class_tag}_days_with_arrivals_by_time_bin.png")
 
-    plt.figure(figsize=(10, 6))
-    plt.plot(bin_check["time_bin"].astype(str), bin_check["var_over_mean_bin"], marker="o")
-    plt.axhline(y=1.0, linestyle="--")
-    plt.title(f"Non-Cumulative Variance/Mean Ratio by Bin - {classification}")
-    plt.xlabel("Time Bin")
-    plt.ylabel("Var / Mean")
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.show()
+    # fig = plt.figure(figsize=(10, 6))
+    # plt.plot(bin_check["time_bin"].astype(str), bin_check["var_over_mean_bin"], marker="o")
+    # plt.axhline(y=1.0, linestyle="--")
+    # plt.title(f"Bin-Level Variance-to-Mean Ratio - {classification.title()}")
+    # plt.xlabel("Time Bin")
+    # plt.ylabel("Variance / Mean")
+    # plt.xticks(rotation=45)
+    # plt.tight_layout()
+    # _save_plot(fig, plot_dir, f"{class_tag}_bin_level_variance_to_mean_ratio.png")
 
 
-def plot_nonpoisson_diagnostics(classification, result):
+def plot_nonpoisson_diagnostics(classification, result, plot_dir="arrival_rate_plot"):
+    class_tag = _sanitize_filename(classification)
     comparison = result["comparison"]
 
-    plt.figure(figsize=(11, 5))
+    fig = plt.figure(figsize=(11, 5))
     plt.plot(comparison["time_bin"], comparison["obs_ratio"], marker="o", label="Observed")
     plt.plot(comparison["time_bin"], comparison["pg_ratio"], marker="s", label="Poisson-Gamma")
     plt.plot(comparison["time_bin"], comparison["pln_ratio"], marker="^", label="Poisson-Lognormal")
     plt.axhline(1.0, linestyle="--")
-    plt.title(f"Variance-to-Mean Ratio by Bin - {classification}")
+    plt.title(f"Variance-to-Mean Ratio by Bin - {classification.title()}")
     plt.xlabel("Time Bin")
     plt.ylabel("Variance / Mean")
     plt.xticks(rotation=45)
     plt.legend()
     plt.tight_layout()
-    plt.show()
+    _save_plot(fig, plot_dir, f"{class_tag}_nonpoisson_variance_to_mean_comparison.png")
 
 
 # =========================================================
 # RUN DIRECTLY
 # =========================================================
 if __name__ == "__main__":
+    plot_dir = "arrival_rate_plot"
+
     df_no_weekend = preprocess_arrival_data("df_selected.xlsx")
 
     results = analyze_arrival_rates(
         df_no_weekend=df_no_weekend,
-        poisson_classes=("interventional",),
+        poisson_classes=("interventional", "angiography"),
         angiography_class="angiography",
         start_hour=8,
         end_hour=17,
         random_state=123,
         make_plots=True,
+        plot_dir=plot_dir,
     )
 
     poisson_parameters = results["poisson_parameters"]
@@ -545,6 +577,6 @@ if __name__ == "__main__":
             }
         }
     }
-    import json
+
     with open("arrival_model_params.json", "w") as f:
         json.dump(arrival_params, f, indent=4)
