@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -506,14 +508,14 @@ def plot_nonpoisson_diagnostics(classification, result):
 
 
 # =========================================================
-# OPTIONAL: RUN DIRECTLY
+# RUN DIRECTLY
 # =========================================================
 if __name__ == "__main__":
     df_no_weekend = preprocess_arrival_data("df_selected.xlsx")
 
     results = analyze_arrival_rates(
         df_no_weekend=df_no_weekend,
-        poisson_classes=("interventional", "angiography"),
+        poisson_classes=("interventional",),
         angiography_class="angiography",
         start_hour=8,
         end_hour=17,
@@ -524,10 +526,25 @@ if __name__ == "__main__":
     poisson_parameters = results["poisson_parameters"]
     angiography_model = results["angiography_model"]
 
-    print("\nPoisson parameters:")
-    for classification, lambda_hat in poisson_parameters.items():
-        print(f"\n{classification}:")
-        print(lambda_hat)
-
-    print("\nAngiography fitted model returned by fit_arrival_models():")
-    print(angiography_model.keys())
+    arrival_params = {
+        "interventional_nhpp": {
+            "model": "NHPP",
+            "start_hour": 8,
+            "end_hour": 17,
+            "lambda_hat": {k: float(v) for k, v in poisson_parameters["interventional"].to_dict().items()}
+        },
+        "angiography_pln": {
+            "model": "Poisson-Lognormal",
+            "start_hour": 8,
+            "end_hour": 17,
+            "lambda_hat": {k: float(v) for k, v in angiography_model["lambda_hat"].to_dict().items()},
+            "pln_fit": {
+                "p_zero": float(angiography_model["pln_fit"]["p_zero"]),
+                "mu": float(angiography_model["pln_fit"]["mu"]),
+                "sigma": float(angiography_model["pln_fit"]["sigma"])
+            }
+        }
+    }
+    import json
+    with open("arrival_model_params.json", "w") as f:
+        json.dump(arrival_params, f, indent=4)
