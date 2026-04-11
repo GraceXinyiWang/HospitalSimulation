@@ -8,10 +8,10 @@ import matplotlib.pyplot as plt
 from scipy.stats import gamma, lognorm, chi2
 
 
-BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_INPUT_EXCEL_PATH = BASE_DIR / "df_selected.xlsx"
-DEFAULT_OUTPUT_JSON_PATH = BASE_DIR / "arrival_model_params.json"
-DEFAULT_PLOT_DIR = BASE_DIR / "arrival_rate_plot"
+
+DEFAULT_INPUT_EXCEL_PATH = "df_selected.xlsx"
+DEFAULT_OUTPUT_JSON_PATH = "arrival_model_params.json"
+DEFAULT_PLOT_DIR = "arrival_rate_plot"
 
 
 # =========================================================
@@ -20,6 +20,7 @@ DEFAULT_PLOT_DIR = BASE_DIR / "arrival_rate_plot"
 def preprocess_arrival_data(filepath=DEFAULT_INPUT_EXCEL_PATH):
     df = pd.read_excel(filepath)
     df = df.copy()
+
     df["Ordered"] = pd.to_datetime(df["Ordered"])
     df["ScanStartF"] = pd.to_datetime(df["ScanStartF"])
     df["ScanStopF"] = pd.to_datetime(df["ScanStopF"])
@@ -30,7 +31,7 @@ def preprocess_arrival_data(filepath=DEFAULT_INPUT_EXCEL_PATH):
     df["Procedure_duration_hours"] = (
         (df["ScanStopF"] - df["ScanStartF"]).dt.total_seconds() / 3600
     )
-    df = df[df["Procedure_duration_hours"] < 6].copy()
+    df = df[df["Procedure_duration_hours"] < 12].copy()
 
     df["arrival_day"] = pd.to_datetime(df["arrival_day"])
     df["hour"] = pd.to_numeric(df["hour"], errors="coerce")

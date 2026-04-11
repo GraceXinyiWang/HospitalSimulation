@@ -5,16 +5,16 @@
         "All": {
             "distribution": "Gamma",
             "parameters": {
-                "shape": 2.513292040557617,
+                "shape": 2.450634997851381,
                 "loc": 0.0,
-                "scale": 0.5153022898283387
+                "scale": 0.5336915417550345
             },
-            "KS_D": 0.026385906642534818,
-            "KS_p_value": 0.07491954240525067,
+            "KS_D": 0.02158533200229884,
+            "KS_p_value": 0.22016284496843064,
             "decision": "Fail to reject",
-            "n": 2346,
-            "mean_value": 1.295105143506678,
-            "inverse_mean_rate": 0.7721380808452049,
+            "n": 2351,
+            "mean_value": 1.3078831702821494,
+            "inverse_mean_rate": 0.7645942869532224,
             "time_unit": "hours"
         }
     },
@@ -86,10 +86,10 @@
     },
     "preparation_category_percentages": {
         "Angiography": {
-            "long prepare": 6.460369163952226,
-            "medium prepare": 12.37785016286645,
-            "no_prepare_required": 36.53637350705755,
-            "short prepare": 44.62540716612378
+            "long prepare": 6.442880346507851,
+            "medium prepare": 12.344342176502437,
+            "no_prepare_required": 36.599891716296696,
+            "short prepare": 44.61288576069302
         },
         "Interventional": {
             "long prepare": 8.49802371541502,
@@ -124,16 +124,16 @@
         "classification=Angiography": {
             "distribution": "Gamma",
             "parameters": {
-                "shape": 1.357691412858344,
+                "shape": 1.3563495614472771,
                 "loc": 0.0,
-                "scale": 38.70257907609817
+                "scale": 38.73790085160362
             },
-            "KS_D": 0.032650796979746155,
-            "KS_p_value": 0.09494150491083586,
+            "KS_D": 0.03236017483400311,
+            "KS_p_value": 0.09914691750183102,
             "decision": "Fail to reject",
-            "n": 1419,
-            "mean_value": 52.5461592670895,
-            "inverse_mean_rate": 0.019030886632780332,
+            "n": 1424,
+            "mean_value": 52.54213483146067,
+            "inverse_mean_rate": 0.019032344292969794,
             "time_unit": "minutes"
         },
         "classification=Interventional": {

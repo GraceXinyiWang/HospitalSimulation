@@ -465,7 +465,7 @@ def main():
         (df_no_weekend["ScanStopF"] - df_no_weekend["ScanStartF"]).dt.total_seconds() / 3600
     )
 
-    df_no_weekend = df_no_weekend[df_no_weekend["Procedure_duration_hours"] < 6].copy()
+    df_no_weekend = df_no_weekend[df_no_weekend["Procedure_duration_hours"] < 12].copy()
 
     procedure_best_df, procedure_all_df, procedure_cleaned_df, procedure_outliers_df, procedure_fit_params = (
         fit_service_time_distribution(
