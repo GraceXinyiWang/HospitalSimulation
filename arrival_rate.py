@@ -8,10 +8,16 @@ import matplotlib.pyplot as plt
 from scipy.stats import gamma, lognorm, chi2
 
 
+BASE_DIR = Path(__file__).resolve().parent
+DEFAULT_INPUT_EXCEL_PATH = BASE_DIR / "df_selected.xlsx"
+DEFAULT_OUTPUT_JSON_PATH = BASE_DIR / "arrival_model_params.json"
+DEFAULT_PLOT_DIR = BASE_DIR / "arrival_rate_plot"
+
+
 # =========================================================
 # DATA PREPROCESSING
 # =========================================================
-def preprocess_arrival_data(filepath="df_selected.xlsx"):
+def preprocess_arrival_data(filepath=DEFAULT_INPUT_EXCEL_PATH):
     df = pd.read_excel(filepath)
     df = df.copy()
     df["Ordered"] = pd.to_datetime(df["Ordered"])
@@ -540,9 +546,9 @@ def plot_nonpoisson_diagnostics(classification, result, plot_dir="arrival_rate_p
 # RUN DIRECTLY
 # =========================================================
 if __name__ == "__main__":
-    plot_dir = "arrival_rate_plot"
+    plot_dir = DEFAULT_PLOT_DIR
 
-    df_no_weekend = preprocess_arrival_data("df_selected.xlsx")
+    df_no_weekend = preprocess_arrival_data(DEFAULT_INPUT_EXCEL_PATH)
 
     results = analyze_arrival_rates(
         df_no_weekend=df_no_weekend,
@@ -578,5 +584,7 @@ if __name__ == "__main__":
         }
     }
 
-    with open("arrival_model_params.json", "w") as f:
+    with open(DEFAULT_OUTPUT_JSON_PATH, "w", encoding="utf-8") as f:
         json.dump(arrival_params, f, indent=4)
+
+    print(f"Saved arrival parameters to: {DEFAULT_OUTPUT_JSON_PATH}")

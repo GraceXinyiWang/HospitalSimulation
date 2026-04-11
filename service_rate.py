@@ -9,9 +9,10 @@ import matplotlib.pyplot as plt
 from arrival_rate import preprocess_arrival_data
 
 
-INPUT_EXCEL_PATH = "df_selected.xlsx"
-OUTPUT_JSON_PATH = "services rate.json"
-PLOT_DIR = "serivce_rate_plot"
+BASE_DIR = Path(__file__).resolve().parent
+INPUT_EXCEL_PATH = BASE_DIR / "df_selected.xlsx"
+OUTPUT_JSON_PATH = BASE_DIR / "services rate.json"
+PLOT_DIR = BASE_DIR / "serivce_rate_plot"
 ALPHA = 0.05
 BINS = 30
 SHOW_PLOTS = False
@@ -555,8 +556,8 @@ def main():
     )
 
     output = {
-        "source_file": INPUT_EXCEL_PATH,
-        "plot_folder": PLOT_DIR,
+        "source_file": INPUT_EXCEL_PATH.name,
+        "plot_folder": PLOT_DIR.name,
         "procedure_duration_hours": {
             "All": row_to_fit_payload(procedure_best_df.iloc[0])
         },
