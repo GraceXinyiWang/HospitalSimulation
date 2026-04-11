@@ -482,9 +482,8 @@ def main():
         )
     )
 
-    # ---------------------------------------------------------
-    # Notebook order: preparation duration
-    # ---------------------------------------------------------
+        
+
     df_no_weekend["Preparation_duration"] = (
         df_no_weekend["lastBooked"] - df_no_weekend["Ordered"]
     )
@@ -492,25 +491,6 @@ def main():
     df_no_weekend["Preparation_duration_days"] = (
         df_no_weekend["Preparation_duration"].dt.total_seconds() / 86400
     )
-
-    df_no_weekend["category_prepared"] = np.select(
-        [
-            (df_no_weekend["Preparation_duration_days"] >= 0) & (df_no_weekend["Preparation_duration_days"] <= 0.3),
-            (df_no_weekend["Preparation_duration_days"] > 0.3) & (df_no_weekend["Preparation_duration_days"] <= 7),
-            (df_no_weekend["Preparation_duration_days"] > 7) & (df_no_weekend["Preparation_duration_days"] <= 30),
-            (df_no_weekend["Preparation_duration_days"] > 30),
-        ],
-        [
-            "no_prepare_required",
-            "short prepare",
-            "medium prepare",
-            "long prepare",
-        ],
-        default="missing",
-    )
-
-    df_no_weekend["category_prepared"] = df_no_weekend["category_prepared"].replace("missing", pd.NA)
-
     prep_best_df, prep_all_df, prep_cleaned_df, prep_outliers_df, prep_fit_params = (
         fit_service_time_distribution(
             df=df_no_weekend,
