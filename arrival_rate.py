@@ -12,6 +12,7 @@ from scipy.stats import gamma, lognorm, chi2
 DEFAULT_INPUT_EXCEL_PATH = "df_selected.xlsx"
 DEFAULT_OUTPUT_JSON_PATH = "arrival_model_params.json"
 DEFAULT_PLOT_DIR = "arrival_rate_plot"
+DEFAULT_BIN_SIZE_HOURS = 1
 
 
 # =========================================================
@@ -42,14 +43,24 @@ def preprocess_arrival_data(filepath=DEFAULT_INPUT_EXCEL_PATH):
 # =========================================================
 # SHARED BIN / COUNT HELPERS
 # =========================================================
-def make_bin_labels(start_hour=8, end_hour=17):
-    bin_edges = list(range(start_hour, end_hour + 1, 1))
-    bin_labels = [f"{h}:00-{h+1}:00" for h in range(start_hour, end_hour)]
+def make_bin_labels(start_hour=8, end_hour=17, bin_size_hours=DEFAULT_BIN_SIZE_HOURS):
+    bin_edges = list(range(start_hour, end_hour, bin_size_hours))
+    if not bin_edges or bin_edges[-1] != end_hour:
+        bin_edges.append(end_hour)
+
+    bin_labels = [
+        f"{left}:00-{right}:00"
+        for left, right in zip(bin_edges[:-1], bin_edges[1:])
+    ]
     return bin_edges, bin_labels
 
 
-def add_time_bins(df, start_hour=8, end_hour=17):
-    bin_edges, bin_labels = make_bin_labels(start_hour, end_hour)
+def add_time_bins(df, start_hour=8, end_hour=17, bin_size_hours=DEFAULT_BIN_SIZE_HOURS):
+    bin_edges, bin_labels = make_bin_labels(
+        start_hour=start_hour,
+        end_hour=end_hour,
+        bin_size_hours=bin_size_hours,
+    )
 
     df_selected = df[(df["hour"] >= start_hour) & (df["hour"] < end_hour)].copy()
     df_selected["time_bin"] = pd.cut(
@@ -139,15 +150,40 @@ def fit_nhpp_parameters(counts_by_day_bin):
     }
 
 
+def print_nhpp_summary(classification, nhpp_result):
+    cumulative_check = nhpp_result["cumulative_check"].copy()
+    cumulative_means = cumulative_check[["t", "Lambda_bar_t"]].copy()
+    cumulative_means["Lambda_bar_t"] = cumulative_means["Lambda_bar_t"].round(4)
+    cumulative_ratio = cumulative_check[["t", "V_over_Lambda"]].copy()
+    cumulative_ratio["V_over_Lambda"] = cumulative_ratio["V_over_Lambda"].round(4)
+
+    print("\n" + "=" * 90)
+    print(f"Cumulative Poisson check for classification: {classification}")
+    print("Mean cumulative arrivals by cutoff:")
+    print(cumulative_means.to_string(index=False))
+    print("\nCumulative variance / mean ratio by cutoff:")
+    print(cumulative_ratio.to_string(index=False))
+    print(
+        f"\nAverage cumulative variance / mean ratio = "
+        f"{nhpp_result['avg_cumulative_ratio']:.4f}"
+    )
+
+
 def assess_nhpp_by_classification(
     df_no_weekend,
     classifications,
     start_hour=8,
     end_hour=17,
+    bin_size_hours=DEFAULT_BIN_SIZE_HOURS,
     make_plots=True,
     plot_dir="arrival_rate_plot",
 ):
-    df_selected, bin_labels = add_time_bins(df_no_weekend, start_hour, end_hour)
+    df_selected, bin_labels = add_time_bins(
+        df_no_weekend,
+        start_hour=start_hour,
+        end_hour=end_hour,
+        bin_size_hours=bin_size_hours,
+    )
     all_weekdays = get_all_weekdays(df_no_weekend)
 
     results = {}
@@ -160,6 +196,8 @@ def assess_nhpp_by_classification(
         )
         nhpp_result = fit_nhpp_parameters(counts_by_day_bin)
         results[classification] = nhpp_result
+
+        print_nhpp_summary(classification, nhpp_result)
 
         if make_plots:
             plot_nhpp_diagnostics(classification, nhpp_result, plot_dir=plot_dir)
@@ -317,12 +355,18 @@ def fit_arrival_models(
     target_class="angiography",
     start_hour=8,
     end_hour=17,
+    bin_size_hours=DEFAULT_BIN_SIZE_HOURS,
     n_sim_days=None,
     random_state=123,
     make_plots=True,
     plot_dir="arrival_rate_plot",
 ):
-    df_selected, bin_labels = add_time_bins(df_no_weekend, start_hour, end_hour)
+    df_selected, bin_labels = add_time_bins(
+        df_no_weekend,
+        start_hour=start_hour,
+        end_hour=end_hour,
+        bin_size_hours=bin_size_hours,
+    )
     all_weekdays = get_all_weekdays(df_no_weekend)
     counts_by_day_bin = build_counts_by_day_bin(
         df_selected=df_selected,
@@ -421,6 +465,7 @@ def analyze_arrival_rates(
     angiography_class="angiography",
     start_hour=8,
     end_hour=17,
+    bin_size_hours=DEFAULT_BIN_SIZE_HOURS,
     random_state=123,
     make_plots=True,
     plot_dir="arrival_rate_plot",
@@ -430,6 +475,7 @@ def analyze_arrival_rates(
         classifications=poisson_classes,
         start_hour=start_hour,
         end_hour=end_hour,
+        bin_size_hours=bin_size_hours,
         make_plots=make_plots,
         plot_dir=plot_dir,
     )
@@ -439,6 +485,7 @@ def analyze_arrival_rates(
         target_class=angiography_class,
         start_hour=start_hour,
         end_hour=end_hour,
+        bin_size_hours=bin_size_hours,
         random_state=random_state,
         make_plots=make_plots,
         plot_dir=plot_dir,
@@ -557,6 +604,7 @@ if __name__ == "__main__":
         angiography_class="angiography",
         start_hour=8,
         end_hour=17,
+        bin_size_hours=DEFAULT_BIN_SIZE_HOURS,
         random_state=123,
         make_plots=True,
         plot_dir=plot_dir,
@@ -570,12 +618,14 @@ if __name__ == "__main__":
             "model": "NHPP",
             "start_hour": 8,
             "end_hour": 17,
+            "bin_size_hours": DEFAULT_BIN_SIZE_HOURS,
             "lambda_hat": {k: float(v) for k, v in poisson_parameters["interventional"].to_dict().items()}
         },
         "angiography_pln": {
             "model": "Poisson-Lognormal",
             "start_hour": 8,
             "end_hour": 17,
+            "bin_size_hours": DEFAULT_BIN_SIZE_HOURS,
             "lambda_hat": {k: float(v) for k, v in angiography_model["lambda_hat"].to_dict().items()},
             "pln_fit": {
                 "p_zero": float(angiography_model["pln_fit"]["p_zero"]),

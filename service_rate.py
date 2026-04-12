@@ -486,7 +486,7 @@ def main():
         
 
     df_no_weekend["Preparation_duration"] = (
-        df_no_weekend["lastBooked"] - df_no_weekend["Ordered"]
+        df_no_weekend["Booked"] - df_no_weekend["Ordered"]
     )
 
     df_no_weekend["Preparation_duration_days"] = (

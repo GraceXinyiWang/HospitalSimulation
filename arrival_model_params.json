@@ -3,6 +3,7 @@
         "model": "NHPP",
         "start_hour": 8,
         "end_hour": 17,
+        "bin_size_hours": 1,
         "lambda_hat": {
             "8:00-9:00": 0.03201024327784891,
             "9:00-10:00": 0.06274007682458387,
@@ -19,6 +20,7 @@
         "model": "Poisson-Lognormal",
         "start_hour": 8,
         "end_hour": 17,
+        "bin_size_hours": 1,
         "lambda_hat": {
             "8:00-9:00": 0.10243277848911651,
             "9:00-10:00": 0.28425096030729835,

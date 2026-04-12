@@ -34,14 +34,6 @@ df_no_weekend['hour'] = pd.to_numeric(df_no_weekend['hour'], errors='coerce')
 
 # ==================================================
 # Step 1: choose time window
-# Change these two numbers when needed
-# Example 1: 0-14
-# start_hour = 0
-# end_hour = 14
-#
-# Example 2: 0-25
-# start_hour = 0
-# end_hour = 25
 # ==================================================
 start_hour = 8
 end_hour = 17
