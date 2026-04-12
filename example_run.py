@@ -11,6 +11,12 @@ from input_loader import load_all_ir_inputs
 from Policy_defined import example_policy_R1
 from simulation_model import IROutpatientSchedulingSim, qik_to_dataframe, run_replications, summarize_replications
 
+# Example experiment settings.
+WARMUP_WEEKS = 52
+ONE_RUN_WEEKS = 520
+REPLICATION_WEEKS = 156
+NUM_REPLICATIONS = 100
+
 # Load the two fitted JSON files once at the beginning.
 loaded_inputs = load_all_ir_inputs(
     arrival_json_path="arrival_model_params.json",
@@ -22,10 +28,13 @@ policy = example_policy_R1()
 
 print("Weekly Qik template")
 print(qik_to_dataframe(policy.qik).head(12))
+print(f"\nMeasured weeks per one-run example: {ONE_RUN_WEEKS}")
+print(f"Warmup weeks before measurement: {WARMUP_WEEKS}")
 
 # Run one simulation instance.
 model = IROutpatientSchedulingSim(
-    num_weeks=52,
+    num_weeks=ONE_RUN_WEEKS,
+    warmup_weeks=WARMUP_WEEKS,
     loaded_inputs=loaded_inputs,
     policy=policy,
     seed=123,
@@ -41,11 +50,12 @@ print(patients_df['category'].value_counts())
 
 # Run multiple independent replications using different seeds.
 rep_df = run_replications(
-    num_replications=100,
-    num_weeks=156,
+    num_replications=NUM_REPLICATIONS,
+    num_weeks=REPLICATION_WEEKS,
     loaded_inputs=loaded_inputs,
     policy=policy,
     base_seed=123,
+    warmup_weeks=WARMUP_WEEKS,
 )
 
 print("\nReplication summary")

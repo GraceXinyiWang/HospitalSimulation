@@ -65,25 +65,37 @@ def example_qik() -> np.ndarray:
     qik = np.ones((2, 40), dtype=int)
 
     for day in range(5):
-        # Each weekday uses 8 blocks, so:
-        # Monday    -> columns 0 to 7
+    #     # Each weekday uses 8 blocks, so:
+    #     # Monday    -> columns 0 to 7
         # Tuesday   -> columns 8 to 15
         # Wednesday -> columns 16 to 23
         # Thursday  -> columns 24 to 31
         # Friday    -> columns 32 to 39
-        base = 8 * day
+       # base = 8 * day
 
         # Interventional row = row 0.
         # Example: allow 1 Interventional patient in the 1st and 5th block of that day.
-        qik[0, base + 0] = 1
-        qik[0, base + 4] = 1
+        qik[0, 6:8] = 0
+        qik[0, 15] = 0
+        qik[0, 22] = 0
+        qik[0, 36] = 0
 
-        # Angiography row = row 1.
-        # Example: allow 1 Angiography patient in the 2nd, 3rd, and 7th block of that day.
-        qik[1, base + 1] = 1
-        qik[1, base + 2] = 1
-        qik[1, base + 6] = 1
 
+        qik[1, 6:8] = 0
+        qik[1, 15] = 0
+        qik[1, 22] = 0
+        qik[1, 36] = 0
+
+        
+        # # Angiography row = row 1.
+        # # Example: allow 1 Angiography patient in the 2nd, 3rd, and 7th block of that day.
+        qik[1,:] = 1
+
+
+        qik[1, 11] = 0
+        qik[1, 18] = 0
+
+       
     return qik
 
 

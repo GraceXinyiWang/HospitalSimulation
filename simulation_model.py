@@ -185,9 +185,18 @@ class IROutpatientSchedulingSim:
         loaded_inputs: LoadedIRInputs,
         policy: WeeklySchedulePolicy,
         seed: int = 123,
+        warmup_weeks: int = 0,
     ):
         self.num_weeks = int(num_weeks)
-        self.num_calendar_days = 7 * self.num_weeks
+        self.warmup_weeks = int(warmup_weeks)
+        if self.num_weeks <= 0:
+            raise ValueError("num_weeks must be positive")
+        if self.warmup_weeks < 0:
+            raise ValueError("warmup_weeks must be non-negative")
+
+        self.total_sim_weeks = self.warmup_weeks + self.num_weeks
+        self.num_calendar_days = 7 * self.total_sim_weeks
+        self.measurement_start_time = self.warmup_weeks * 7 * MINUTES_PER_DAY
         self.loaded_inputs = loaded_inputs
         self.policy = policy
         self.rng = np.random.default_rng(seed)
@@ -218,7 +227,8 @@ class IROutpatientSchedulingSim:
         self.patient_counter = 0
         self.patients: List[Patient] = []
         self.booking_records: List[Dict[str, Any]] = []
-        self.unscheduled_patients = 0
+        self.unscheduled_patients_total = 0
+        self.unscheduled_patients_measured = 0
 
         # Overtime statistics.
         self.total_lunch_overtime = 0.0
@@ -237,7 +247,7 @@ class IROutpatientSchedulingSim:
     def _build_working_day_indices(self) -> List[int]:
         """Return the calendar-day indices corresponding to Monday-Friday only."""
         out: List[int] = []
-        for week in range(self.num_weeks):
+        for week in range(self.total_sim_weeks):
             week_offset = 7 * week
             for weekday in range(5):
                 out.append(week_offset + weekday)
@@ -250,7 +260,9 @@ class IROutpatientSchedulingSim:
 
     def _update_waiting_room_area(self, new_time: float) -> None:
         """Update time-integrated waiting-room queue length for congestion Z3."""
-        self.waiting_room_area += self.waiting_room_len * (new_time - self.last_area_time)
+        effective_start = max(self.last_area_time, self.measurement_start_time)
+        if new_time > effective_start:
+            self.waiting_room_area += self.waiting_room_len * (new_time - effective_start)
         self.last_area_time = new_time
 
     def _parse_bin_start_hours(self, bin_index: Sequence[Any], fallback_start_hour: int) -> List[int]:
@@ -357,7 +369,7 @@ class IROutpatientSchedulingSim:
         qik = self.policy.qik
         feasible = self.policy.timetable.feasible_qik
 
-        for week in range(self.num_weeks):
+        for week in range(self.total_sim_weeks):
             for _, row in meta.iterrows():
                 k = int(row["block_index"])
                 weekday = int(row["weekday"])
@@ -430,7 +442,9 @@ class IROutpatientSchedulingSim:
 
         # No feasible future slot remains.
         if idx >= len(slots):
-            self.unscheduled_patients += 1
+            self.unscheduled_patients_total += 1
+            if patient.order_arrival_time >= self.measurement_start_time:
+                self.unscheduled_patients_measured += 1
             return
 
         slot = slots[idx]
@@ -481,7 +495,11 @@ class IROutpatientSchedulingSim:
         """Finish current procedure, free the room, and pull next waiting patient if any."""
         patient.actual_proc_end = self.current_time
 
-        lunch_ot, after_ot, total_ot = compute_nonworking_overlap(patient.actual_proc_start, patient.actual_proc_end)
+        lunch_ot, after_ot, total_ot = compute_nonworking_overlap(
+            patient.actual_proc_start,
+            patient.actual_proc_end,
+            measurement_start_time=self.measurement_start_time,
+        )
         self.total_lunch_overtime += lunch_ot
         self.total_after_hours_overtime += after_ot
         self.total_overtime += total_ot
@@ -515,15 +533,33 @@ class IROutpatientSchedulingSim:
             else:
                 raise ValueError(f"Unknown event type: {event_type}")
 
-        patients_df = patient_records_to_dataframe(self.patients)
+        patients_df = patient_records_to_dataframe(
+            self.patients,
+            measurement_start_time=self.measurement_start_time,
+        )
         bookings_df = pd.DataFrame(self.booking_records)
+        if not bookings_df.empty:
+            if patients_df.empty:
+                bookings_df = bookings_df.iloc[0:0].copy()
+            else:
+                bookings_df = bookings_df[
+                    bookings_df["patient_id"].isin(patients_df["patient_id"])
+                ].copy()
         summary_df = build_summary_dataframe(self, patients_df)
         return summary_df, patients_df, bookings_df
 
 
 
-def compute_nonworking_overlap(start_time: float, end_time: float) -> Tuple[float, float, float]:
+def compute_nonworking_overlap(
+    start_time: float,
+    end_time: float,
+    measurement_start_time: float = 0.0,
+) -> Tuple[float, float, float]:
     """Compute how much of a procedure overlaps lunch or after-hours time."""
+    start_time = max(start_time, measurement_start_time)
+    if end_time <= start_time:
+        return 0.0, 0.0, 0.0
+
     lunch_overlap = 0.0
     after_hours_overlap = 0.0
 
@@ -544,7 +580,10 @@ def compute_nonworking_overlap(start_time: float, end_time: float) -> Tuple[floa
 
 
 
-def patient_records_to_dataframe(patients: Sequence[Patient]) -> pd.DataFrame:
+def patient_records_to_dataframe(
+    patients: Sequence[Patient],
+    measurement_start_time: float = 0.0,
+) -> pd.DataFrame:
     """Convert all patient objects into one analysis table."""
     rows: List[Dict[str, Any]] = []
     for p in patients:
@@ -575,8 +614,10 @@ def patient_records_to_dataframe(patients: Sequence[Patient]) -> pd.DataFrame:
     df["prep_duration"] = df["prep_end_time"] - df["prep_start_time"]
     df["booking_wait"] = df["scheduled_time"] - df["ready_to_schedule_time"]
     df["waiting_room_wait"] = df["actual_proc_start"] - df["waiting_room_arrival"]
-    df["total_wait_to_proc_start"] = df["actual_proc_start"] - df["order_arrival_time"]
+    df["total_wait_to_proc_start"] = df["actual_proc_start"] - df["ready_to_schedule_time"]
     df["procedure_duration"] = df["actual_proc_end"] - df["actual_proc_start"]
+    if measurement_start_time > 0.0:
+        df = df[df["order_arrival_time"] >= measurement_start_time].copy()
     return df
 
 
@@ -605,8 +646,8 @@ def build_summary_dataframe(model: IROutpatientSchedulingSim, patients_df: pd.Da
     z2 = float(model.total_overtime / model.num_weeks)
 
     # Z3 = average number of patients in the waiting room over simulated time.
-    sim_end_time = max(model.current_time, 1.0)
-    z3 = float(model.waiting_room_area /sim_end_time)
+    sim_end_time = max(model.current_time - model.measurement_start_time, 1.0)
+    z3 = float(model.waiting_room_area / sim_end_time)
 
     # Overall weighted objective.
     H = 0.6 * z1 + 0.2 * z2 + 0.2 * z3
@@ -616,9 +657,12 @@ def build_summary_dataframe(model: IROutpatientSchedulingSim, patients_df: pd.Da
             {
                 "timetable": model.policy.timetable.name,
                 "num_weeks": model.num_weeks,
+                "warmup_weeks": model.warmup_weeks,
+                "total_sim_weeks": model.total_sim_weeks,
                 "scheduled_count": scheduled_count,
                 "completed_count": completed_count,
-                "unscheduled_count": model.unscheduled_patients,
+                "unscheduled_count": model.unscheduled_patients_measured,
+                "unscheduled_count_total": model.unscheduled_patients_total,
                 "mean_prep_duration": mean_prep_duration,
                 "mean_booking_wait": mean_booking_wait,
                 "mean_lateness": mean_lateness,
@@ -642,6 +686,7 @@ def run_replications(
     loaded_inputs: LoadedIRInputs,
     policy: WeeklySchedulePolicy,
     base_seed: int = 123,
+    warmup_weeks: int = 0,
 ) -> pd.DataFrame:
     """Run several independent replications and stack the summary rows."""
     rows: List[pd.DataFrame] = []
@@ -651,6 +696,7 @@ def run_replications(
             loaded_inputs=loaded_inputs,
             policy=policy,
             seed=base_seed + rep,
+            warmup_weeks=warmup_weeks,
         )
         summary_df, _, _ = model.run()
         out = summary_df.copy()
