@@ -30,8 +30,9 @@ import pandas as pd
 
 from input_loader import DistributionSpec, LoadedIRInputs
 
-# All times are stored in minutes.
+# All times are stored in hours.
 MINUTES_PER_HOUR = 60.0
+HOUR_PER_DAY = 24.0
 MINUTES_PER_DAY = 24.0 * 60.0
 
 # Eight one-hour booking blocks per weekday.
@@ -633,7 +634,7 @@ def build_summary_dataframe(model: IROutpatientSchedulingSim, patients_df: pd.Da
         scheduled_count = 0
         completed_count = 0
     else:
-        # Z1 = average total wait from order arrival to actual procedure start.
+        # Z1 = average total wait from order arrival to actual procedure start record in hours.
         z1 = float(patients_df["total_wait_to_proc_start"].dropna().mean())
         mean_booking_wait = float(patients_df["booking_wait"].dropna().mean())
         mean_prep_duration = float(patients_df["prep_duration"].dropna().mean())
@@ -642,8 +643,8 @@ def build_summary_dataframe(model: IROutpatientSchedulingSim, patients_df: pd.Da
         scheduled_count = int(patients_df["scheduled_time"].notna().sum())
         completed_count = int(patients_df["actual_proc_end"].notna().sum())
 
-    # Z2 = average overtime per week.
-    z2 = float(model.total_overtime / model.num_weeks)
+    # Z2 = average overtime per week, reported in hours.
+    z2 = float(model.total_overtime / model.num_weeks / MINUTES_PER_HOUR)
 
     # Z3 = average number of patients in the waiting room over simulated time.
     sim_end_time = max(model.current_time - model.measurement_start_time, 1.0)

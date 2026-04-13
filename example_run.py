@@ -17,6 +17,15 @@ ONE_RUN_WEEKS = 520
 REPLICATION_WEEKS = 156
 NUM_REPLICATIONS = 100
 
+PRINT_LABEL_MAP = {
+    "mean_prep_duration": "mean_prep_duration_hour",
+    "mean_booking_wait": "mean_booking_wait_hour",
+    "mean_lateness": "mean_lateness_hour",
+    "mean_procedure_duration": "mean_procedure_duration_hour",
+    "Z1_wait_time": "Z1_avg_patient_wait_time",
+    "Z2_overtime": "Z2_overtime_hour/week",
+}
+
 # Load the two fitted JSON files once at the beginning.
 loaded_inputs = load_all_ir_inputs(
     arrival_json_path="arrival_model_params.json",
@@ -40,9 +49,10 @@ model = IROutpatientSchedulingSim(
     seed=123,
 )
 summary_df, patients_df, bookings_df = model.run()
+summary_print_df = summary_df.rename(columns=PRINT_LABEL_MAP)
 
 print("\nOne-run summary")
-print(summary_df.T)
+print(summary_print_df.T)
 print("\nBookings")
 print(bookings_df.head())
 print("\nPatients")
@@ -57,8 +67,11 @@ rep_df = run_replications(
     base_seed=123,
     warmup_weeks=WARMUP_WEEKS,
 )
+rep_print_df = rep_df.rename(columns=PRINT_LABEL_MAP)
+stats_print_df = summarize_replications(rep_df).copy()
+stats_print_df["metric"] = stats_print_df["metric"].replace(PRINT_LABEL_MAP)
 
 print("\nReplication summary")
-print(rep_df[["replication", "Z1_wait_time", "Z2_overtime", "Z3_congestion", "H"]])
+print(rep_print_df[["replication", "Z1_avg_patient_wait_time", "Z2_overtime_hour/week", "Z3_congestion", "H"]])
 print("\nAcross-replication statistics")
-print(summarize_replications(rep_df))
+print(stats_print_df)
