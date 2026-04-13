@@ -36,8 +36,8 @@ ARRIVAL_JSON_PATH = "arrival_model_params.json"
 SERVICE_JSON_PATH = "services rate.json"
 RAW_DATA_PATH = "df_selected.xlsx"
 
-NUM_WEEKS = 12
-WARMUP_WEEKS = 2
+NUM_WEEKS = 4
+WARMUP_WEEKS = 1
 BASE_SEED = 123
 
 SUBSET_ALPHA = 0.05
@@ -52,6 +52,8 @@ FINAL_EVAL_REPS = 5
 SEARCH_TIMETABLE = "both"   # "R1", "R2", or "both"
 MAX_QIK_VALUE = 2  # Max value for each Qik entry (0, 1, or 2)``
 SHARE_DAILY_QIK_ACROSS_CLASSES = True
+
+
 
 # For debugging only. Set to None to use all candidates per timetable.
 MAX_CANDIDATES = None
@@ -148,6 +150,11 @@ POLICIES = []
 # SMALL HELPERS
 # =========================================================
 
+def _require_policies():
+    if len(POLICIES) == 0:
+        raise RuntimeError("No candidate policies were generated.")
+
+
 def candidate_obj(system_index: int) -> CandidatePolicy:
     return POLICIES[system_index - 1]
 
@@ -236,13 +243,6 @@ def _set_active_search(search_timetable):
 
 
 def _print_df_preview(df, max_rows=MAX_PREVIEW_ROWS):
-    if df.empty:
-        print("(empty)")
-        return
-
-    if len(df) <= max_rows:
-        print(df.to_string(index=False))
-        return
 
     print(df.head(max_rows).to_string(index=False))
     print(f"... showing first {max_rows} of {len(df)} rows")
@@ -301,16 +301,6 @@ def subset_crn(k, alpha, n, seed, policy_indices=None):
     )
     means = sample_matrix.mean(axis=0)
 
-    if len(indices) == 1:
-        summary_df = pd.DataFrame(
-            {
-                "system": indices,
-                "policy": [candidate_name(i) for i in indices],
-                "mean_H_subset": means,
-            }
-        )
-        return indices, summary_df
-
     t_value = stats.t.ppf(
         1.0 - alpha / max(len(indices) - 1, 1),
         df=max(n - 1, 1),
@@ -348,6 +338,7 @@ def subset_crn(k, alpha, n, seed, policy_indices=None):
         }
     ).sort_values("mean_H_subset", ascending=True, ignore_index=True)
 
+
     return keep_indices, summary_df
 
 
@@ -370,14 +361,11 @@ def kn_crn(k, alpha, n0, delta, seed, policy_indices=None):
                 {
                     "system": best_system,
                     "policy": candidate_name(best_system),
-                    "mean_H_final": float(MySim(best_system, seed=seed)),
+                    "mean_H_final": float(MySim(best_system, n=1, seed=seed)),
                 }
             ]
         )
         return {"Best": best_system, "n": 1, "Elim": np.zeros(1), "summary": summary_df}
-
-    if n0 < 2:
-        raise ValueError("n0 must be at least 2 for KN with CRN.")
 
     II = np.arange(1, k + 1)
     Active = np.full(k, True)
@@ -459,7 +447,7 @@ def _run_active_search():
         k=num_systems,
         alpha=SUBSET_ALPHA,
         n=SUBSET_INITIAL_REPS,
-        seed=BASE_SEED,
+        seed=BASE_SEED
     )
 
     print("\nSubset selection with CRN")
@@ -468,6 +456,9 @@ def _run_active_search():
 
     print("\nPolicies kept after subset screening")
     kept_subset_df = subset_result_table(subset, subset_df)
+    kept_subset_df = kept_subset_df.head(10).copy()
+    subset = kept_subset_df["system"].astype(int).tolist()
+
     print(f"Number of systems kept after subset screening = {len(subset)}")
     print(kept_subset_df.to_string(index=False))
 
@@ -482,6 +473,9 @@ def _run_active_search():
     best_system = result["Best"]
 
     best_candidate = candidate_obj(best_system)
+    best_mean_h = float(
+        result["summary"].loc[result["summary"]["system"] == best_system, "mean_H_final"].iloc[0]
+    )
 
     print("\nFinal KN with CRN result")
     _print_df_preview(result["summary"])
@@ -500,32 +494,13 @@ def _run_active_search():
         ).to_string()
     )
 
-    final_eval_df = run_replications(
-        num_replications=FINAL_EVAL_REPS,
-        num_weeks=NUM_WEEKS,
-        loaded_inputs=LOADED_INPUTS,
-        policy=best_candidate.build_policy(),
-        base_seed=BASE_SEED + 20_000,
-        warmup_weeks=WARMUP_WEEKS,
-    )
-
-    print("\nFinal check on selected policy")
-    final_eval_view = final_eval_df[
-        ["replication", "Z1_wait_time", "Z2_overtime", "Z3_congestion", "H"]
-    ]
-    _print_df_preview(final_eval_view)
-    avg_final_h = float(final_eval_df["H"].mean())
-    print(f"\nAverage H over final check = {avg_final_h:.4f}")
-
     return {
         "timetable": ACTIVE_TIMETABLE,
         "best_system": best_system,
         "best_policy_name": best_candidate.name,
-        "best_daily_qik": best_candidate.daily_qik.copy(),
-        "best_weekly_qik": best_candidate.weekly_qik.copy(),
-        "avg_final_H": avg_final_h,
-        "final_eval_df": final_eval_df.copy(),
+        "best_mean_H": best_mean_h,
     }
+
 
 
 def main():
@@ -537,7 +512,7 @@ def main():
         all_results.append(_run_active_search())
 
     if len(all_results) == 1:
-        return
+        return all_results
 
     comparison_df = pd.DataFrame(
         [
@@ -545,11 +520,11 @@ def main():
                 "timetable": item["timetable"],
                 "best_system": item["best_system"],
                 "policy": item["best_policy_name"],
-                "avg_H_final_check": item["avg_final_H"],
+                "best_mean_H": item["best_mean_H"],
             }
             for item in all_results
         ]
-    ).sort_values("avg_H_final_check", ascending=True, ignore_index=True)
+    ).sort_values("best_mean_H", ascending=True, ignore_index=True)
 
     print("\n" + "=" * 80)
     print("Overall comparison across timetables")
@@ -560,7 +535,9 @@ def main():
     print(f"\nOverall best timetable = {overall_best['timetable']}")
     print(f"Overall best system = {overall_best['best_system']}")
     print(f"Overall best policy = {overall_best['best_policy_name']}")
-    print(f"Overall best average H = {overall_best['avg_final_H']:.4f}")
+    print(f"Overall best mean H = {overall_best['best_mean_H']:.4f}")
+
+    return all_results
 
 
 if __name__ == "__main__":
