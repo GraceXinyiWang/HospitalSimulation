@@ -11,14 +11,14 @@ Each candidate policy consists of:
 2. A daily Qik matrix of shape (2, 8)
 
 The daily Qik is repeated Monday-Friday to form the weekly policy.
-Interventional and angiography/radiology daily Qik values are optimized
-independently, so the two rows do not need to match.
+Star: Both classes can share the same daily Qik value at each
+within-day block to reduce the search space.
 """
 
 import math
 from dataclasses import dataclass
 from functools import partial
-from itertools import islice
+from itertools import islice, product
 
 import numpy as np
 import pandas as pd
@@ -50,7 +50,9 @@ KN_DELTA = 0.01
 FINAL_EVAL_REPS = 5
 
 SEARCH_TIMETABLE = "both"   # "R1", "R2", or "both"
-MAX_QIK_VALUE = 2  # Max value for each free Qik entry (0, 1, or 2)
+MAX_QIK_VALUE = 2  # Max value for each Qik entry (0, 1, or 2)``
+SHARE_DAILY_QIK_ACROSS_CLASSES = True
+
 
 
 # For debugging only. Set to None to use all candidates per timetable.
@@ -101,8 +103,6 @@ def _resolve_search_components(search_timetable):
     elif search_timetable == "R2":
         timetable = Policy_defined.example_timetable_R2()
         build_policy_func = Policy_defined.build_bruteforce_policy_R2
-    else:
-        raise ValueError("search_timetable must be 'R1' or 'R2'.")
 
     return timetable, build_policy_func
 
@@ -110,10 +110,16 @@ def _resolve_search_components(search_timetable):
 def _build_candidate_policies(search_timetable):
     timetable, build_policy_func = _resolve_search_components(search_timetable)
 
-    generator = Policy_defined.generate_bruteforce_daily_qik_candidates(
-        max_value=MAX_QIK_VALUE,
-        timetable=timetable,
-    )
+    if SHARE_DAILY_QIK_ACROSS_CLASSES:
+        generator = _generate_shared_daily_qik_candidates(
+            max_value=MAX_QIK_VALUE,
+            timetable=timetable,
+        )
+    else:
+        generator = Policy_defined.generate_bruteforce_daily_qik_candidates(
+            max_value=MAX_QIK_VALUE,
+            timetable=timetable,
+        )
 
     if MAX_CANDIDATES is not None:
         generator = islice(generator, MAX_CANDIDATES)
@@ -143,13 +149,13 @@ POLICIES = []
 # =========================================================
 # SMALL HELPERS
 # =========================================================
+
 def _require_policies():
     if len(POLICIES) == 0:
         raise RuntimeError("No candidate policies were generated.")
 
 
 def candidate_obj(system_index: int) -> CandidatePolicy:
-    _require_policies()
     return POLICIES[system_index - 1]
 
 
@@ -163,6 +169,49 @@ def _resolve_policy_indices(k, policy_indices=None):
     else:
         indices = list(policy_indices)
     return indices
+
+
+def _shared_daily_feasible_blocks(timetable):
+    weekly_mask = np.asarray(timetable.feasible_qik, dtype=int)
+    stacked = np.stack(
+        [weekly_mask[:, 8 * day : 8 * (day + 1)] for day in range(5)],
+        axis=0,
+    )
+
+    # Shared block k is free if at least one class can use it on at least one weekday.
+    feasible_daily_by_class = stacked.max(axis=0)
+    return feasible_daily_by_class.max(axis=0)
+
+
+def _generate_shared_daily_qik_candidates(
+    max_value: int = 3,
+    timetable=None,
+):
+    """
+    Generator where both classes share one Qik value at each daily block.
+
+    Decision variable:
+    - shared_daily_qik shape = (8,)
+    - one value per within-day block
+    - expanded into daily_qik shape = (2, 8) by copying to both classes
+    """
+    if max_value < 0:
+        raise ValueError("max_value must be >= 0.")
+
+    if timetable is None:
+        shared_free_blocks = np.ones(8, dtype=int)
+    else:
+        shared_free_blocks = _shared_daily_feasible_blocks(timetable)
+
+    free_block_indices = list(np.where(shared_free_blocks == 1)[0])
+
+    for values in product(range(max_value + 1), repeat=len(free_block_indices)):
+        shared_daily_qik = np.zeros(8, dtype=int)
+        for block_idx, value in zip(free_block_indices, values):
+            shared_daily_qik[block_idx] = value
+
+        daily_qik = np.tile(shared_daily_qik, (2, 1))
+        yield daily_qik
 
 
 def policy_table(policy_indices):
@@ -194,6 +243,7 @@ def _set_active_search(search_timetable):
 
 
 def _print_df_preview(df, max_rows=MAX_PREVIEW_ROWS):
+
     print(df.head(max_rows).to_string(index=False))
     print(f"... showing first {max_rows} of {len(df)} rows")
 
@@ -214,6 +264,7 @@ def MySim(system_index, n=1, seed=None):
     seed : int or None
         Base seed
     """
+
     if seed is None:
         seed = BASE_SEED
 
@@ -287,7 +338,11 @@ def subset_crn(k, alpha, n, seed, policy_indices=None):
         }
     ).sort_values("mean_H_subset", ascending=True, ignore_index=True)
 
+
     return keep_indices, summary_df
+
+
+
 
 
 # =========================================================
@@ -345,11 +400,11 @@ def kn_crn(k, alpha, n0, delta, seed, policy_indices=None):
                 if i == l:
                     continue
 
-                s2_diff = Sigma[i - 1, i - 1] + Sigma[l - 1, l - 1] - 2 * Sigma[i - 1, l - 1]
-                w = max(0.0, (delta / 2.0) * (h2 * s2_diff / delta**2 - r))
+                S2diff = Sigma[i - 1, i - 1] + Sigma[l - 1, l - 1] - 2 * Sigma[i - 1, l - 1]
+                W = max(0.0, (delta / 2.0) * (h2 * S2diff / delta**2 - r))
 
                 # Smaller H is better
-                if Ysum[i - 1] > Ysum[l - 1] + w:
+                if Ysum[i - 1] > Ysum[l - 1] + W:
                     ATemp[i - 1] = False
                     Elim[i - 1] = r
                     break
@@ -374,13 +429,17 @@ def kn_crn(k, alpha, n0, delta, seed, policy_indices=None):
 # MAIN
 # =========================================================
 def _run_active_search():
-    _require_policies()
+
 
     num_systems = len(POLICIES)
+    timetable, _ = _resolve_search_components(ACTIVE_TIMETABLE)
 
     print("Candidate policy set")
     print(f"Timetable = {ACTIVE_TIMETABLE}")
-    print("shared_daily_qik_across_classes = False")
+    print(f"shared_daily_qik_across_classes = {SHARE_DAILY_QIK_ACROSS_CLASSES}")
+    if SHARE_DAILY_QIK_ACROSS_CLASSES:
+        shared_free_blocks = _shared_daily_feasible_blocks(timetable)
+        print(f"shared free daily blocks = {int(shared_free_blocks.sum())}")
     print(f"Number of candidate systems = {num_systems}")
     _print_df_preview(policy_table(range(1, num_systems + 1)))
 
@@ -388,7 +447,7 @@ def _run_active_search():
         k=num_systems,
         alpha=SUBSET_ALPHA,
         n=SUBSET_INITIAL_REPS,
-        seed=BASE_SEED,
+        seed=BASE_SEED
     )
 
     print("\nSubset selection with CRN")
@@ -441,6 +500,7 @@ def _run_active_search():
         "best_policy_name": best_candidate.name,
         "best_mean_H": best_mean_h,
     }
+
 
 
 def main():
