@@ -35,28 +35,29 @@ from simulation_model import (
 # =========================================================
 def example_timetable_R1() -> BookingTimetable:
     """R1: every class is allowed in every weekly block."""
-    feasible_qik = np.ones((2, 40), dtype=int)
+    feasible_qik = np.zeros((2, 40), dtype=int)
 
-    # Interventional infeasible weekly blocks
-    feasible_qik[1, [8,16,24]] = 0
+    # Interventional feasible weekly blocks
+    feasible_qik[0, [5, 25,26,29,37,38,39,24]] = 1
 
-    # Angiography infeasible weekly blocks
-    feasible_qik[0, [3,5,8]] = 0
+    # Angiography feasible weekly blocks
+    feasible_qik[1, [9,10, 11,12,22,25,26,27,33,34]] = 1
 
     return BookingTimetable(name="R1_placeholder", feasible_qik=feasible_qik)
 
 
 def example_timetable_R2() -> BookingTimetable:
-    """R2: placeholder infeasibility example."""
-    feasible_qik = np.ones((2, 40), dtype=int)
+    """R2: explicit weekly mask with some overlap between the two classes."""
+    feasible_qik = np.zeros((2, 40), dtype=int)
 
-    # Interventional infeasible weekly blocks
-    feasible_qik[0, [2, 3, 10, 11, 18, 19, 26, 27, 34, 35]] = 0
+    # row 0 = Interventional
+    feasible_qik[0, [1, 2, 9, 10, 17, 18, 20, 24, 25, 26, 37, 38]] = 1
 
-    # Angiography infeasible weekly blocks
-    feasible_qik[1, [0, 4, 8, 12, 16, 20, 24, 28, 32, 36]] = 0
+    # row 1 = Angiography
+    feasible_qik[1, [1, 2, 3, 12, 13, 20, 21, 22, 25, 26, 27, 33, 34]] = 1
 
     return BookingTimetable(name="R2_placeholder", feasible_qik=feasible_qik)
+
 
 
 # =========================================================
@@ -119,8 +120,8 @@ def default_daily_qik() -> list[list[int]]:
     Shape = (2, 8)
     """
     return [
-        [1, 1, 1, 1, 1, 1, 0, 0],  # Interventional
-        [1, 1, 1, 0, 1, 1, 1, 0],  # Angiography
+        [1, 1, 1, 1, 1, 1, 1, 1],  # Interventional
+        [1, 1, 1, 1, 1, 1, 1, 1],  # Angiography
     ]
 
 

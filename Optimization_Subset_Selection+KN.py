@@ -11,12 +11,14 @@ Each candidate policy consists of:
 2. A daily Qik matrix of shape (2, 8)
 
 The daily Qik is repeated Monday-Friday to form the weekly policy.
+Star: Both classes can share the same daily Qik value at each
+within-day block to reduce the search space.
 """
 
 import math
 from dataclasses import dataclass
 from functools import partial
-from itertools import islice
+from itertools import islice, product
 
 import numpy as np
 import pandas as pd
@@ -34,24 +36,26 @@ ARRIVAL_JSON_PATH = "arrival_model_params.json"
 SERVICE_JSON_PATH = "services rate.json"
 RAW_DATA_PATH = "df_selected.xlsx"
 
-NUM_WEEKS = 52
-WARMUP_WEEKS = 8
+NUM_WEEKS = 12
+WARMUP_WEEKS = 2
 BASE_SEED = 123
 
 SUBSET_ALPHA = 0.05
 SUBSET_INITIAL_REPS = 2
 
 KN_ALPHA = 0.05
-KN_INITIAL_REPS = 10
-KN_DELTA = 15.0
+KN_INITIAL_REPS = 3
+KN_DELTA = 0.01
 
 FINAL_EVAL_REPS = 5
 
-SEARCH_TIMETABLE = "R1"   # "R1" or "R2"
-MAX_QIK_VALUE = 3
+SEARCH_TIMETABLE = "both"   # "R1", "R2", or "both"
+MAX_QIK_VALUE = 2  # Max value for each Qik entry (0, 1, or 2)``
+SHARE_DAILY_QIK_ACROSS_CLASSES = True
 
-# For debugging only. Set to None to use all candidates.
+# For debugging only. Set to None to use all candidates per timetable.
 MAX_CANDIDATES = None
+MAX_PREVIEW_ROWS = 20
 
 
 # =========================================================
@@ -79,26 +83,41 @@ LOADED_INPUTS = load_all_ir_inputs(
 # =========================================================
 # BUILD CANDIDATE POLICIES
 # =========================================================
-def _resolve_search_components():
-    if SEARCH_TIMETABLE == "R1":
+def _resolve_search_timetables():
+    search_value = str(SEARCH_TIMETABLE).strip().upper()
+
+    if search_value == "BOTH":
+        return ["R1", "R2"]
+    if search_value in {"R1", "R2"}:
+        return [search_value]
+
+    raise ValueError("SEARCH_TIMETABLE must be 'R1', 'R2', or 'both'.")
+
+
+def _resolve_search_components(search_timetable):
+    if search_timetable == "R1":
         timetable = Policy_defined.example_timetable_R1()
         build_policy_func = Policy_defined.build_bruteforce_policy_R1
-    elif SEARCH_TIMETABLE == "R2":
+    elif search_timetable == "R2":
         timetable = Policy_defined.example_timetable_R2()
         build_policy_func = Policy_defined.build_bruteforce_policy_R2
-    else:
-        raise ValueError("SEARCH_TIMETABLE must be 'R1' or 'R2'.")
 
     return timetable, build_policy_func
 
 
-def _build_candidate_policies():
-    timetable, build_policy_func = _resolve_search_components()
+def _build_candidate_policies(search_timetable):
+    timetable, build_policy_func = _resolve_search_components(search_timetable)
 
-    generator = Policy_defined.generate_bruteforce_daily_qik_candidates(
-        max_value=MAX_QIK_VALUE,
-        timetable=timetable,
-    )
+    if SHARE_DAILY_QIK_ACROSS_CLASSES:
+        generator = _generate_shared_daily_qik_candidates(
+            max_value=MAX_QIK_VALUE,
+            timetable=timetable,
+        )
+    else:
+        generator = Policy_defined.generate_bruteforce_daily_qik_candidates(
+            max_value=MAX_QIK_VALUE,
+            timetable=timetable,
+        )
 
     if MAX_CANDIDATES is not None:
         generator = islice(generator, MAX_CANDIDATES)
@@ -111,7 +130,7 @@ def _build_candidate_policies():
         candidates.append(
             CandidatePolicy(
                 system_id=idx,
-                name=f"{SEARCH_TIMETABLE}_cand_{idx}",
+                name=f"{search_timetable}_cand_{idx}",
                 daily_qik=daily_qik,
                 weekly_qik=weekly_qik,
                 build_policy=partial(build_policy_func, daily_qik=daily_qik),
@@ -121,20 +140,15 @@ def _build_candidate_policies():
     return candidates
 
 
-POLICIES = _build_candidate_policies()
+ACTIVE_TIMETABLE = None
+POLICIES = []
 
 
 # =========================================================
 # SMALL HELPERS
 # =========================================================
-def _require_policies():
-    if len(POLICIES) == 0:
-        raise RuntimeError("No candidate policies were generated.")
-
 
 def candidate_obj(system_index: int) -> CandidatePolicy:
-    if system_index < 1 or system_index > len(POLICIES):
-        raise IndexError(f"system_index must be between 1 and {len(POLICIES)}.")
     return POLICIES[system_index - 1]
 
 
@@ -147,10 +161,50 @@ def _resolve_policy_indices(k, policy_indices=None):
         indices = list(range(1, k + 1))
     else:
         indices = list(policy_indices)
-
-    if len(indices) != k:
-        raise ValueError("k must match the number of candidate policy indices.")
     return indices
+
+
+def _shared_daily_feasible_blocks(timetable):
+    weekly_mask = np.asarray(timetable.feasible_qik, dtype=int)
+    stacked = np.stack(
+        [weekly_mask[:, 8 * day : 8 * (day + 1)] for day in range(5)],
+        axis=0,
+    )
+
+    # Shared block k is free if at least one class can use it on at least one weekday.
+    feasible_daily_by_class = stacked.max(axis=0)
+    return feasible_daily_by_class.max(axis=0)
+
+
+def _generate_shared_daily_qik_candidates(
+    max_value: int = 3,
+    timetable=None,
+):
+    """
+    Generator where both classes share one Qik value at each daily block.
+
+    Decision variable:
+    - shared_daily_qik shape = (8,)
+    - one value per within-day block
+    - expanded into daily_qik shape = (2, 8) by copying to both classes
+    """
+    if max_value < 0:
+        raise ValueError("max_value must be >= 0.")
+
+    if timetable is None:
+        shared_free_blocks = np.ones(8, dtype=int)
+    else:
+        shared_free_blocks = _shared_daily_feasible_blocks(timetable)
+
+    free_block_indices = list(np.where(shared_free_blocks == 1)[0])
+
+    for values in product(range(max_value + 1), repeat=len(free_block_indices)):
+        shared_daily_qik = np.zeros(8, dtype=int)
+        for block_idx, value in zip(free_block_indices, values):
+            shared_daily_qik[block_idx] = value
+
+        daily_qik = np.tile(shared_daily_qik, (2, 1))
+        yield daily_qik
 
 
 def policy_table(policy_indices):
@@ -160,11 +214,38 @@ def policy_table(policy_indices):
         rows.append(
             {
                 "system": i,
+                "timetable": ACTIVE_TIMETABLE,
                 "policy": cand.name,
                 "daily_qik": cand.daily_qik.tolist(),
             }
         )
     return pd.DataFrame(rows)
+
+
+def subset_result_table(subset, subset_df):
+    kept_df = policy_table(subset)
+    mean_df = subset_df[["system", "mean_H_subset"]].copy()
+    out = kept_df.merge(mean_df, on="system", how="left")
+    return out.sort_values(["mean_H_subset", "system"], ascending=[True, True], ignore_index=True)
+
+
+def _set_active_search(search_timetable):
+    global ACTIVE_TIMETABLE, POLICIES
+    ACTIVE_TIMETABLE = str(search_timetable).upper()
+    POLICIES = _build_candidate_policies(ACTIVE_TIMETABLE)
+
+
+def _print_df_preview(df, max_rows=MAX_PREVIEW_ROWS):
+    if df.empty:
+        print("(empty)")
+        return
+
+    if len(df) <= max_rows:
+        print(df.to_string(index=False))
+        return
+
+    print(df.head(max_rows).to_string(index=False))
+    print(f"... showing first {max_rows} of {len(df)} rows")
 
 
 # =========================================================
@@ -183,7 +264,6 @@ def MySim(system_index, n=1, seed=None):
     seed : int or None
         Base seed
     """
-    _require_policies()
 
     if seed is None:
         seed = BASE_SEED
@@ -269,6 +349,9 @@ def subset_crn(k, alpha, n, seed, policy_indices=None):
     ).sort_values("mean_H_subset", ascending=True, ignore_index=True)
 
     return keep_indices, summary_df
+
+
+
 
 
 # =========================================================
@@ -357,15 +440,20 @@ def kn_crn(k, alpha, n0, delta, seed, policy_indices=None):
 # =========================================================
 # MAIN
 # =========================================================
-def main():
-    _require_policies()
+def _run_active_search():
+
 
     num_systems = len(POLICIES)
+    timetable, _ = _resolve_search_components(ACTIVE_TIMETABLE)
 
     print("Candidate policy set")
-    print(f"Timetable = {SEARCH_TIMETABLE}")
+    print(f"Timetable = {ACTIVE_TIMETABLE}")
+    print(f"shared_daily_qik_across_classes = {SHARE_DAILY_QIK_ACROSS_CLASSES}")
+    if SHARE_DAILY_QIK_ACROSS_CLASSES:
+        shared_free_blocks = _shared_daily_feasible_blocks(timetable)
+        print(f"shared free daily blocks = {int(shared_free_blocks.sum())}")
     print(f"Number of candidate systems = {num_systems}")
-    print(policy_table(range(1, num_systems + 1)).to_string(index=False))
+    _print_df_preview(policy_table(range(1, num_systems + 1)))
 
     subset, subset_df = subset_crn(
         k=num_systems,
@@ -376,49 +464,32 @@ def main():
 
     print("\nSubset selection with CRN")
     print(f"subset_reps = {SUBSET_INITIAL_REPS}")
-    print(subset_df.to_string(index=False))
+    _print_df_preview(subset_df)
 
     print("\nPolicies kept after subset screening")
-    print(policy_table(subset).to_string(index=False))
+    kept_subset_df = subset_result_table(subset, subset_df)
+    print(f"Number of systems kept after subset screening = {len(subset)}")
+    print(kept_subset_df.to_string(index=False))
 
-    if len(subset) == 1:
-        best_system = subset[0]
-        best_mean = subset_df.loc[subset_df["system"] == best_system, "mean_H_subset"].iloc[0]
-
-        result = {
-            "Best": best_system,
-            "n": SUBSET_INITIAL_REPS,
-            "Elim": np.zeros(1),
-            "summary": pd.DataFrame(
-                [
-                    {
-                        "system": best_system,
-                        "policy": candidate_name(best_system),
-                        "mean_H_final": best_mean,
-                    }
-                ]
-            ),
-        }
-    else:
-        result = kn_crn(
-            k=len(subset),
-            alpha=KN_ALPHA,
-            n0=KN_INITIAL_REPS,
-            delta=KN_DELTA,
-            seed=BASE_SEED + 10_000,
-            policy_indices=subset,
-        )
-        best_system = result["Best"]
+    result = kn_crn(
+        k=len(subset),
+        alpha=KN_ALPHA,
+        n0=KN_INITIAL_REPS,
+        delta=KN_DELTA,
+        seed=BASE_SEED + 10_000,
+        policy_indices=subset,
+    )
+    best_system = result["Best"]
 
     best_candidate = candidate_obj(best_system)
 
     print("\nFinal KN with CRN result")
-    print(result["summary"].to_string(index=False))
+    _print_df_preview(result["summary"])
     print(f"Best system = {best_system}")
     print(f"Total samples used = {result['n']}")
 
     print("\nSelected best policy")
-    print(policy_table([best_system]).to_string(index=False))
+    _print_df_preview(policy_table([best_system]))
 
     print("\nSelected best policy weekly Qik")
     print(
@@ -439,12 +510,57 @@ def main():
     )
 
     print("\nFinal check on selected policy")
-    print(
-        final_eval_df[
-            ["replication", "Z1_wait_time", "Z2_overtime", "Z3_congestion", "H"]
-        ].to_string(index=False)
-    )
-    print(f"\nAverage H over final check = {final_eval_df['H'].mean():.4f}")
+    final_eval_view = final_eval_df[
+        ["replication", "Z1_wait_time", "Z2_overtime", "Z3_congestion", "H"]
+    ]
+    _print_df_preview(final_eval_view)
+    avg_final_h = float(final_eval_df["H"].mean())
+    print(f"\nAverage H over final check = {avg_final_h:.4f}")
+
+    return {
+        "timetable": ACTIVE_TIMETABLE,
+        "best_system": best_system,
+        "best_policy_name": best_candidate.name,
+        "best_daily_qik": best_candidate.daily_qik.copy(),
+        "best_weekly_qik": best_candidate.weekly_qik.copy(),
+        "avg_final_H": avg_final_h,
+        "final_eval_df": final_eval_df.copy(),
+    }
+
+
+def main():
+    all_results = []
+
+    for search_timetable in _resolve_search_timetables():
+        print("\n" + "=" * 80)
+        _set_active_search(search_timetable)
+        all_results.append(_run_active_search())
+
+    if len(all_results) == 1:
+        return
+
+    comparison_df = pd.DataFrame(
+        [
+            {
+                "timetable": item["timetable"],
+                "best_system": item["best_system"],
+                "policy": item["best_policy_name"],
+                "avg_H_final_check": item["avg_final_H"],
+            }
+            for item in all_results
+        ]
+    ).sort_values("avg_H_final_check", ascending=True, ignore_index=True)
+
+    print("\n" + "=" * 80)
+    print("Overall comparison across timetables")
+    print(comparison_df.to_string(index=False))
+
+    best_timetable = str(comparison_df.iloc[0]["timetable"])
+    overall_best = next(item for item in all_results if item["timetable"] == best_timetable)
+    print(f"\nOverall best timetable = {overall_best['timetable']}")
+    print(f"Overall best system = {overall_best['best_system']}")
+    print(f"Overall best policy = {overall_best['best_policy_name']}")
+    print(f"Overall best average H = {overall_best['avg_final_H']:.4f}")
 
 
 if __name__ == "__main__":

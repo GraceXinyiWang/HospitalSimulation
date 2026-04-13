@@ -105,6 +105,11 @@ def sample_from_spec(spec: DistributionSpec, rng: np.random.Generator) -> float:
 
     if dist in {"deterministic", "constant"}:
         return float(p["value"])
+    if dist == "empirical":
+        samples = np.asarray(p["samples"], dtype=float)
+        if samples.size == 0:
+            raise ValueError("Empirical distribution received no samples.")
+        return float(rng.choice(samples))
     if dist in {"uniform"}:
         return float(rng.uniform(float(p["low"]), float(p["high"])))
     if dist in {"exponential", "expon"}:
@@ -219,8 +224,10 @@ class IROutpatientSchedulingSim:
 
         self.waiting_room_queue: List[Patient] = []
 
-        # waiting_room_len and waiting_room_area are used to compute congestion Z3.
+        # waiting_room_len tracks the current queue size, while
+        # max_waiting_room_len stores the peak queue size over the run.
         self.waiting_room_len = 0
+        self.max_waiting_room_len = 0
         self.waiting_room_area = 0.0
         self.last_area_time = 0.0
 
@@ -491,6 +498,7 @@ class IROutpatientSchedulingSim:
         else:
             self.waiting_room_queue.append(patient)
             self.waiting_room_len += 1
+            self.max_waiting_room_len = max(self.max_waiting_room_len, self.waiting_room_len)
 
     def handle_end_procedure(self, patient: Patient) -> None:
         """Finish current procedure, free the room, and pull next waiting patient if any."""
@@ -647,14 +655,22 @@ def build_summary_dataframe(model: IROutpatientSchedulingSim, patients_df: pd.Da
     z2_minutes_per_week = float(model.total_overtime / model.num_weeks)
     z2 = z2_minutes_per_week / MINUTES_PER_HOUR
 
-    # Z3 = average number of patients in the waiting room over simulated time.
-    sim_end_time = max(model.current_time - model.measurement_start_time, 1.0)
-    z3 = float(model.waiting_room_area / sim_end_time)
+    # Z3 = maximum number of patients waiting in the waiting-room queue.
+    z3 = float(model.max_waiting_room_len)
 
     # Overall weighted objective.
-    # Keep H on the original minute-based overtime scale so historical
-    # comparisons do not change just because Z2 is displayed in hours.
-    H = 0.6 * z1 + 0.2 * z2_minutes_per_week + 0.2 * z3
+    # Z1 is thresholded in days: there is no penalty until average wait exceeds
+    # 28 days, then the excess is scaled relative to that 28-day target.
+    z1_days = z1 / MINUTES_PER_DAY
+    z1_term = max(0.0, (z1_days - 28.0) / 28.0)
+
+    # Z2 is already reported in hours/week, so scale that directly.
+    z2_term = z2 / 2.5
+
+    # Z3 is scaled relative to a target max waiting-room queue length of 2.
+    z3_term = z3 / 2.0
+
+    H = 0.6 * z1_term + 0.2 * z2_term + 0.2 * z3_term
 
     return pd.DataFrame(
         [

@@ -172,6 +172,9 @@ def _spec_from_service_payload(payload: Dict[str, Any], multiplier: float) -> Di
     params = payload["parameters"]
 
     if dist_name == "gamma":
+        loc = float(params.get("loc", 0.0))
+        if not math.isclose(loc, 0.0, abs_tol=1e-12):
+            raise ValueError("Gamma distributions with nonzero loc are not supported by the simulation.")
         return DistributionSpec(
             "gamma",
             {
@@ -181,11 +184,16 @@ def _spec_from_service_payload(payload: Dict[str, Any], multiplier: float) -> Di
         )
 
     if dist_name == "lognormal":
+        loc = float(params.get("loc", 0.0))
+        if not math.isclose(loc, 0.0, abs_tol=1e-12):
+            raise ValueError("Lognormal distributions with nonzero loc are not supported by the simulation.")
         return DistributionSpec(
             "lognormal",
             {
-                # scipy lognormal fit is stored with "scale" = exp(mu)
-                "mu": math.log(float(params["scale"])),
+                # scipy lognormal fit is stored with "scale" = exp(mu).
+                # If the original unit is hours or days and we convert to minutes,
+                # then the lognormal mean parameter must shift by log(multiplier).
+                "mu": math.log(float(params["scale"]) * multiplier),
                 "sigma": float(params["sigma"]),
             },
         )
@@ -201,6 +209,9 @@ def _spec_from_service_payload(payload: Dict[str, Any], multiplier: float) -> Di
         )
 
     if dist_name == "exponential":
+        loc = float(params.get("loc", 0.0))
+        if not math.isclose(loc, 0.0, abs_tol=1e-12):
+            raise ValueError("Exponential distributions with nonzero loc are not supported by the simulation.")
         return DistributionSpec(
             "exponential",
             {
@@ -281,6 +292,8 @@ def load_service_inputs_from_json(
     # If short-prepare should be modeled empirically, read the raw data once here.
     empirical_short_prepare = None
     if short_prepare_fallback == "empirical_from_raw":
+        if raw_data_path is None:
+            raise ValueError("raw_data_path is required when short_prepare_fallback='empirical_from_raw'.")
         empirical_short_prepare = _load_short_prepare_empirical_from_raw(raw_data_path)
 
     # The fitting JSON did not provide a parametric distribution for every prep group.

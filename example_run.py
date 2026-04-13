@@ -12,17 +12,18 @@ from Policy_defined import example_policy_R1
 from simulation_model import IROutpatientSchedulingSim, qik_to_dataframe, run_replications, summarize_replications
 
 # Example experiment settings.
-WARMUP_WEEKS = 52
-ONE_RUN_WEEKS = 520
+WARMUP_WEEKS = 4
+ONE_RUN_WEEKS = 52
 REPLICATION_WEEKS = 156
 NUM_REPLICATIONS = 100
+MINUTES_PER_DAY = 24.0 * 60.0
 
 PRINT_LABEL_MAP = {
-    "mean_prep_duration": "mean_prep_duration_hour",
-    "mean_booking_wait": "mean_booking_wait_hour",
-    "mean_lateness": "mean_lateness_hour",
-    "mean_procedure_duration": "mean_procedure_duration_hour",
-    "Z1_wait_time": "Z1_avg_patient_wait_time",
+    "mean_prep_duration": "mean_prep_duration_min",
+    "mean_booking_wait": "mean_booking_wait_min",
+    "mean_lateness": "mean_lateness_min",
+    "mean_procedure_duration": "mean_procedure_duration_min",
+    "Z1_wait_time": "Z1_avg_patient_wait_time_day",
     "Z2_overtime": "Z2_overtime_hour/week",
 }
 
@@ -50,6 +51,9 @@ model = IROutpatientSchedulingSim(
 )
 summary_df, patients_df, bookings_df = model.run()
 summary_print_df = summary_df.rename(columns=PRINT_LABEL_MAP)
+summary_print_df["Z1_avg_patient_wait_time_day"] = (
+    summary_df["Z1_wait_time"] / MINUTES_PER_DAY
+)
 
 print("\nOne-run summary")
 print(summary_print_df.T)
@@ -68,10 +72,15 @@ rep_df = run_replications(
     warmup_weeks=WARMUP_WEEKS,
 )
 rep_print_df = rep_df.rename(columns=PRINT_LABEL_MAP)
+rep_print_df["Z1_avg_patient_wait_time_day"] = rep_df["Z1_wait_time"] / MINUTES_PER_DAY
 stats_print_df = summarize_replications(rep_df).copy()
+z1_mask = stats_print_df["metric"] == "Z1_wait_time"
+stats_print_df.loc[z1_mask, ["mean", "std", "min", "max"]] = (
+    stats_print_df.loc[z1_mask, ["mean", "std", "min", "max"]] / MINUTES_PER_DAY
+)
 stats_print_df["metric"] = stats_print_df["metric"].replace(PRINT_LABEL_MAP)
 
 print("\nReplication summary")
-print(rep_print_df[["replication", "Z1_avg_patient_wait_time", "Z2_overtime_hour/week", "Z3_congestion", "H"]])
+print(rep_print_df[["replication", "Z1_avg_patient_wait_time_day", "Z2_overtime_hour/week", "Z3_congestion", "H"]])
 print("\nAcross-replication statistics")
 print(stats_print_df)
