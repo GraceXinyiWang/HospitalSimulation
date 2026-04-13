@@ -643,15 +643,18 @@ def build_summary_dataframe(model: IROutpatientSchedulingSim, patients_df: pd.Da
         scheduled_count = int(patients_df["scheduled_time"].notna().sum())
         completed_count = int(patients_df["actual_proc_end"].notna().sum())
 
-    # Z2 = average overtime per week.
-    z2 = float(model.total_overtime / model.num_weeks)
+    # Z2 = average overtime per week, reported in hours.
+    z2_minutes_per_week = float(model.total_overtime / model.num_weeks)
+    z2 = z2_minutes_per_week / MINUTES_PER_HOUR
 
     # Z3 = average number of patients in the waiting room over simulated time.
     sim_end_time = max(model.current_time - model.measurement_start_time, 1.0)
     z3 = float(model.waiting_room_area / sim_end_time)
 
     # Overall weighted objective.
-    H = 0.6 * z1 + 0.2 * z2 + 0.2 * z3
+    # Keep H on the original minute-based overtime scale so historical
+    # comparisons do not change just because Z2 is displayed in hours.
+    H = 0.6 * z1 + 0.2 * z2_minutes_per_week + 0.2 * z3
 
     return pd.DataFrame(
         [
