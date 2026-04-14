@@ -16,13 +16,22 @@ within-day block to reduce the search space.
 """
 
 import math
+import os
+import time
+from pathlib import Path
 from dataclasses import dataclass
 from functools import partial
 from itertools import islice, product
+import json
 
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy import stats
+from tqdm.auto import tqdm
 
 import Policy_defined
 from input_loader import load_all_ir_inputs
@@ -52,6 +61,10 @@ FINAL_EVAL_REPS = 5
 SEARCH_TIMETABLE = "both"   # "R1", "R2", or "both"
 MAX_QIK_VALUE = 2  # Max value for each Qik entry (0, 1, or 2)``
 SHARE_DAILY_QIK_ACROSS_CLASSES = True
+TOP_SUBSET_POLICIES = 10
+
+BASE_DIR = Path(__file__).resolve().parent
+OUTPUT_DIR = BASE_DIR / "optimization_subset_selection_kn_simplified_outputs4"
 
 
 
@@ -171,6 +184,12 @@ def _resolve_policy_indices(k, policy_indices=None):
     return indices
 
 
+def _progress_desc(stage: str) -> str:
+    if ACTIVE_TIMETABLE is None:
+        return stage
+    return f"{ACTIVE_TIMETABLE} {stage}"
+
+
 def _shared_daily_feasible_blocks(timetable):
     weekly_mask = np.asarray(timetable.feasible_qik, dtype=int)
     stacked = np.stack(
@@ -248,6 +267,37 @@ def _print_df_preview(df, max_rows=MAX_PREVIEW_ROWS):
     print(f"... showing first {max_rows} of {len(df)} rows")
 
 
+def _ensure_output_dir() -> Path:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    return OUTPUT_DIR
+
+
+def _save_csv(df: pd.DataFrame, filename: str) -> Path:
+    output_path = _ensure_output_dir() / filename
+    df.to_csv(output_path, index=False)
+    return output_path
+
+
+def _serialize_qik(qik: np.ndarray) -> str:
+    return json.dumps(np.asarray(qik, dtype=int).tolist())
+
+
+def _policy_export_table(policy_indices):
+    rows = []
+    for system_index in policy_indices:
+        candidate = candidate_obj(system_index)
+        rows.append(
+            {
+                "system": system_index,
+                "timetable": ACTIVE_TIMETABLE,
+                "policy": candidate.name,
+                "daily_qik_json": _serialize_qik(candidate.daily_qik),
+                "weekly_qik_json": _serialize_qik(candidate.weekly_qik),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 # =========================================================
 # SIMULATION WRAPPER
 # =========================================================
@@ -296,9 +346,15 @@ def subset_crn(k, alpha, n, seed, policy_indices=None):
     """
     indices = _resolve_policy_indices(k, policy_indices)
 
-    sample_matrix = np.column_stack(
-        [np.asarray(MySim(system_index, n=n, seed=seed), dtype=float) for system_index in indices]
-    )
+    sample_columns = []
+    for system_index in tqdm(
+        indices,
+        desc=_progress_desc("subset samples"),
+        unit="policy",
+    ):
+        sample_columns.append(np.asarray(MySim(system_index, n=n, seed=seed), dtype=float))
+
+    sample_matrix = np.column_stack(sample_columns)
     means = sample_matrix.mean(axis=0)
 
     t_value = stats.t.ppf(
@@ -308,7 +364,13 @@ def subset_crn(k, alpha, n, seed, policy_indices=None):
 
     keep_indices = []
 
-    for col_i, system_i in enumerate(indices):
+    screening_progress = tqdm(
+        enumerate(indices),
+        total=len(indices),
+        desc=_progress_desc("subset screen"),
+        unit="policy",
+    )
+    for col_i, system_i in screening_progress:
         eliminated = False
 
         for col_j, system_j in enumerate(indices):
@@ -327,6 +389,8 @@ def subset_crn(k, alpha, n, seed, policy_indices=None):
         if not eliminated:
             keep_indices.append(system_i)
 
+        screening_progress.set_postfix(kept=len(keep_indices), refresh=False)
+
     if not keep_indices:
         keep_indices = [indices[int(np.argmin(means))]]
 
@@ -337,9 +401,13 @@ def subset_crn(k, alpha, n, seed, policy_indices=None):
             "mean_H_subset": means,
         }
     ).sort_values("mean_H_subset", ascending=True, ignore_index=True)
+    summary_df.insert(0, "subset_rank", np.arange(1, len(summary_df) + 1))
 
 
     return keep_indices, summary_df
+
+
+
 
 
 # =========================================================
@@ -356,6 +424,7 @@ def kn_crn(k, alpha, n0, delta, seed, policy_indices=None):
         summary_df = pd.DataFrame(
             [
                 {
+                    "kn_rank": 1,
                     "system": best_system,
                     "policy": candidate_name(best_system),
                     "mean_H_final": float(MySim(best_system, n=1, seed=seed)),
@@ -371,7 +440,11 @@ def kn_crn(k, alpha, n0, delta, seed, policy_indices=None):
     Yn0 = np.zeros((k, n0))
 
     # Initial CRN samples
-    for i in range(k):
+    for i in tqdm(
+        range(k),
+        desc=_progress_desc("KN initial samples"),
+        unit="policy",
+    ):
         system_index = indices[i]
         Yn0[i, :] = np.asarray(MySim(system_index, n=n0, seed=seed), dtype=float)
 
@@ -383,30 +456,41 @@ def kn_crn(k, alpha, n0, delta, seed, policy_indices=None):
     Ysum = Yn0.sum(axis=1)
     r = n0
 
-    while np.sum(Active) > 1:
-        r += 1
-        ATemp = Active.copy()
+    with tqdm(
+        total=k - 1,
+        desc=_progress_desc("KN eliminations"),
+        unit="policy",
+    ) as elimination_progress:
+        elimination_progress.set_postfix(replication=r, active=int(np.sum(Active)), refresh=False)
 
-        # One extra CRN observation for each active system
-        for i in II[Active]:
-            system_index = indices[i - 1]
-            Ysum[i - 1] += MySim(system_index, n=1, seed=seed + r - 1)
+        while np.sum(Active) > 1:
+            r += 1
+            ATemp = Active.copy()
+            active_before = int(np.sum(Active))
 
-        for i in II[Active]:
-            for l in II[Active]:
-                if i == l:
-                    continue
+            # One extra CRN observation for each active system
+            for i in II[Active]:
+                system_index = indices[i - 1]
+                Ysum[i - 1] += MySim(system_index, n=1, seed=seed + r - 1)
 
-                S2diff = Sigma[i - 1, i - 1] + Sigma[l - 1, l - 1] - 2 * Sigma[i - 1, l - 1]
-                W = max(0.0, (delta / 2.0) * (h2 * S2diff / delta**2 - r))
+            for i in II[Active]:
+                for l in II[Active]:
+                    if i == l:
+                        continue
 
-                # Smaller H is better
-                if Ysum[i - 1] > Ysum[l - 1] + W:
-                    ATemp[i - 1] = False
-                    Elim[i - 1] = r
-                    break
+                    S2diff = Sigma[i - 1, i - 1] + Sigma[l - 1, l - 1] - 2 * Sigma[i - 1, l - 1]
+                    W = max(0.0, (delta / 2.0) * (h2 * S2diff / delta**2 - r))
 
-        Active = ATemp
+                    # Smaller H is better
+                    if Ysum[i - 1] > Ysum[l - 1] + W:
+                        ATemp[i - 1] = False
+                        Elim[i - 1] = r
+                        break
+
+            Active = ATemp
+            active_after = int(np.sum(Active))
+            elimination_progress.update(active_before - active_after)
+            elimination_progress.set_postfix(replication=r, active=active_after, refresh=False)
 
     best_local = int(II[Active][0])
     best_system = indices[best_local - 1]
@@ -418,15 +502,122 @@ def kn_crn(k, alpha, n0, delta, seed, policy_indices=None):
             "mean_H_final": Ysum / r,
         }
     ).sort_values("mean_H_final", ascending=True, ignore_index=True)
+    summary_df.insert(0, "kn_rank", np.arange(1, len(summary_df) + 1))
 
     return {"Best": best_system, "n": r, "Elim": Elim, "summary": summary_df}
+
+
+def final_eval_table(policy_indices, subset_df, kn_df, num_replications, seed):
+    subset_lookup = subset_df[["system", "subset_rank", "mean_H_subset"]].copy()
+    kn_lookup = kn_df[["system", "kn_rank", "mean_H_final"]].copy()
+
+    rows = []
+    for system_index in tqdm(
+        policy_indices,
+        desc=_progress_desc("final eval"),
+        unit="policy",
+    ):
+        candidate = candidate_obj(system_index)
+        rep_df = run_replications(
+            num_replications=num_replications,
+            num_weeks=NUM_WEEKS,
+            loaded_inputs=LOADED_INPUTS,
+            policy=candidate.build_policy(),
+            base_seed=int(seed),
+            warmup_weeks=WARMUP_WEEKS,
+        )
+        h_values = rep_df["H"].to_numpy(dtype=float)
+        rows.append(
+            {
+                "system": system_index,
+                "policy": candidate.name,
+                "mean_H_eval": float(h_values.mean()),
+                "std_H_eval": float(h_values.std(ddof=1)) if len(h_values) > 1 else 0.0,
+                "min_H_eval": float(h_values.min()),
+                "max_H_eval": float(h_values.max()),
+                "final_eval_reps": int(num_replications),
+            }
+        )
+
+    final_df = pd.DataFrame(rows)
+    final_df = final_df.merge(subset_lookup, on=["system"], how="left")
+    final_df = final_df.merge(kn_lookup, on=["system"], how="left")
+    final_df = final_df.merge(_policy_export_table(policy_indices), on=["system", "policy"], how="left")
+
+    column_order = [
+        "system",
+        "timetable",
+        "policy",
+        "subset_rank",
+        "kn_rank",
+        "mean_H_subset",
+        "mean_H_final",
+        "mean_H_eval",
+        "std_H_eval",
+        "min_H_eval",
+        "max_H_eval",
+        "final_eval_reps",
+        "daily_qik_json",
+        "weekly_qik_json",
+    ]
+    return final_df[column_order].sort_values(
+        ["mean_H_eval", "system"],
+        ascending=[True, True],
+        ignore_index=True,
+    )
+
+
+def _save_top_policy_plot(final_df: pd.DataFrame, filename: str) -> Path:
+    plot_df = final_df.sort_values(["subset_rank", "system"], ascending=[True, True], ignore_index=True).copy()
+    if plot_df.empty:
+        raise ValueError("Cannot plot an empty policy table.")
+
+    y_positions = np.arange(len(plot_df))
+    labels = [
+        f"{int(row.subset_rank)}. {row.policy}"
+        for row in plot_df.itertuples(index=False)
+    ]
+
+    fig_height = max(5.0, 0.65 * len(plot_df) + 1.5)
+    fig, ax = plt.subplots(figsize=(12, fig_height))
+
+    ax.barh(
+        y_positions,
+        plot_df["mean_H_eval"].to_numpy(dtype=float),
+        xerr=plot_df["std_H_eval"].to_numpy(dtype=float),
+        color="#4C78A8",
+        ecolor="#1F1F1F",
+        capsize=4,
+        alpha=0.9,
+        label="Mean ± std",
+    )
+    min_values = plot_df["min_H_eval"].to_numpy(dtype=float)
+    max_values = plot_df["max_H_eval"].to_numpy(dtype=float)
+    ax.hlines(y_positions, min_values, max_values, color="#E45756", linewidth=2, label="Min-Max range")
+    ax.scatter(min_values, y_positions, color="#E45756", s=20)
+    ax.scatter(max_values, y_positions, color="#E45756", s=20)
+
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels(labels)
+    ax.invert_yaxis()
+    ax.set_xlabel("Final evaluation H")
+    ax.set_ylabel("Policy")
+    ax.set_title(f"{ACTIVE_TIMETABLE} top {len(plot_df)} policies after subset selection")
+    ax.grid(axis="x", alpha=0.25)
+    ax.legend(loc="lower right")
+
+    fig.tight_layout()
+    output_path = _ensure_output_dir() / filename
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
 
 
 # =========================================================
 # MAIN
 # =========================================================
 def _run_active_search():
-
+    run_start = time.perf_counter()
 
     num_systems = len(POLICIES)
     timetable, _ = _resolve_search_components(ACTIVE_TIMETABLE)
@@ -453,7 +644,7 @@ def _run_active_search():
 
     print("\nPolicies kept after subset screening")
     kept_subset_df = subset_result_table(subset, subset_df)
-    kept_subset_df = kept_subset_df.head(10).copy()
+    kept_subset_df = kept_subset_df.head(TOP_SUBSET_POLICIES).copy()
     subset = kept_subset_df["system"].astype(int).tolist()
 
     print(f"Number of systems kept after subset screening = {len(subset)}")
@@ -491,16 +682,81 @@ def _run_active_search():
         ).to_string()
     )
 
+    subset_csv_path = _save_csv(
+        subset_df,
+        f"{ACTIVE_TIMETABLE.lower()}_subset_summary.csv",
+    )
+    kn_csv_path = _save_csv(
+        result["summary"],
+        f"{ACTIVE_TIMETABLE.lower()}_kn_summary.csv",
+    )
+
+    final_eval_df = final_eval_table(
+        policy_indices=subset,
+        subset_df=subset_df,
+        kn_df=result["summary"],
+        num_replications=FINAL_EVAL_REPS,
+        seed=BASE_SEED + 20_000,
+    )
+    final_eval_df.insert(
+        len(final_eval_df.columns) - 2,
+        "selected_by_kn",
+        final_eval_df["system"].eq(best_system),
+    )
+    final_csv_path = _save_csv(
+        final_eval_df,
+        f"{ACTIVE_TIMETABLE.lower()}_final_policy_results.csv",
+    )
+    plot_path = _save_top_policy_plot(
+        final_eval_df.sort_values(["subset_rank", "system"], ascending=[True, True], ignore_index=True),
+        f"{ACTIVE_TIMETABLE.lower()}_top_{len(final_eval_df)}_subset_policies.png",
+    )
+
+    best_eval_mean_h = float(
+        final_eval_df.loc[final_eval_df["system"] == best_system, "mean_H_eval"].iloc[0]
+    )
+
+    print("\nFinal evaluation statistics for subset-selected policies")
+    _print_df_preview(
+        final_eval_df[
+            [
+                "system",
+                "policy",
+                "subset_rank",
+                "kn_rank",
+                "mean_H_eval",
+                "std_H_eval",
+                "min_H_eval",
+                "max_H_eval",
+                "selected_by_kn",
+            ]
+        ]
+    )
+    print(f"Saved subset summary CSV: {subset_csv_path}")
+    print(f"Saved KN summary CSV: {kn_csv_path}")
+    print(f"Saved final policy results CSV: {final_csv_path}")
+    print(f"Saved top policy plot PNG: {plot_path}")
+    elapsed_seconds = time.perf_counter() - run_start
+    print(f"Elapsed runtime for {ACTIVE_TIMETABLE}: {elapsed_seconds:.2f} seconds")
+
     return {
         "timetable": ACTIVE_TIMETABLE,
         "best_system": best_system,
         "best_policy_name": best_candidate.name,
         "best_mean_H": best_mean_h,
+        "best_mean_H_eval": best_eval_mean_h,
+        "final_results_df": final_eval_df,
+        "subset_csv_path": str(subset_csv_path),
+        "kn_csv_path": str(kn_csv_path),
+        "final_csv_path": str(final_csv_path),
+        "plot_path": str(plot_path),
+        "elapsed_seconds": elapsed_seconds,
     }
 
 
 
 def main():
+    overall_start = time.perf_counter()
     all_results = []
 
     for search_timetable in _resolve_search_timetables():
@@ -509,6 +765,8 @@ def main():
         all_results.append(_run_active_search())
 
     if len(all_results) == 1:
+        total_elapsed_seconds = time.perf_counter() - overall_start
+        print(f"Total runtime: {total_elapsed_seconds:.2f} seconds")
         return all_results
 
     comparison_df = pd.DataFrame(
@@ -517,22 +775,41 @@ def main():
                 "timetable": item["timetable"],
                 "best_system": item["best_system"],
                 "policy": item["best_policy_name"],
-                "best_mean_H": item["best_mean_H"],
+                "best_mean_H_kn": item["best_mean_H"],
+                "best_mean_H_eval": item["best_mean_H_eval"],
+                "elapsed_seconds": item["elapsed_seconds"],
+                "subset_csv_path": item["subset_csv_path"],
+                "kn_csv_path": item["kn_csv_path"],
+                "final_csv_path": item["final_csv_path"],
+                "plot_path": item["plot_path"],
             }
             for item in all_results
         ]
-    ).sort_values("best_mean_H", ascending=True, ignore_index=True)
+    ).sort_values("best_mean_H_eval", ascending=True, ignore_index=True)
 
     print("\n" + "=" * 80)
     print("Overall comparison across timetables")
     print(comparison_df.to_string(index=False))
+
+    comparison_csv_path = _save_csv(
+        comparison_df,
+        "overall_timetable_comparison.csv",
+    )
+    combined_final_csv_path = _save_csv(
+        pd.concat([item["final_results_df"] for item in all_results], ignore_index=True),
+        "all_timetables_final_policy_results.csv",
+    )
 
     best_timetable = str(comparison_df.iloc[0]["timetable"])
     overall_best = next(item for item in all_results if item["timetable"] == best_timetable)
     print(f"\nOverall best timetable = {overall_best['timetable']}")
     print(f"Overall best system = {overall_best['best_system']}")
     print(f"Overall best policy = {overall_best['best_policy_name']}")
-    print(f"Overall best mean H = {overall_best['best_mean_H']:.4f}")
+    print(f"Overall best final-eval mean H = {overall_best['best_mean_H_eval']:.4f}")
+    print(f"Saved overall comparison CSV: {comparison_csv_path}")
+    print(f"Saved combined final policy results CSV: {combined_final_csv_path}")
+    total_elapsed_seconds = time.perf_counter() - overall_start
+    print(f"Total runtime: {total_elapsed_seconds:.2f} seconds")
 
     return all_results
 
