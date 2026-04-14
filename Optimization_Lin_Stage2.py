@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import time
 """
 Stage-II block-schedule search adapted from Lin et al. (2017).
 
@@ -795,6 +795,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    start_time = time.perf_counter()
     args = parse_args()
     config = Stage2Config(
         num_weeks=args.num_weeks,
@@ -815,7 +816,7 @@ def main() -> None:
         service_json_path=SERVICE_JSON_PATH,
         raw_data_path=RAW_DATA_PATH,
     )
-
+   
     all_results = []
     for search_timetable in _resolve_search_list(args.timetable):
         print("\n" + "=" * 80)
@@ -850,6 +851,10 @@ def main() -> None:
         print(result["initial_qik_df"].to_string(index=False))
         print("\nBest weekly Qik")
         print(result["best_qik_df"].to_string(index=False))
+    
+    end_time = time.perf_counter()
+    elapsed = end_time - start_time
+    print(f"Running time: {elapsed:.6f} seconds")
 
     if all_results:
         summary_df = pd.DataFrame(all_results).sort_values(

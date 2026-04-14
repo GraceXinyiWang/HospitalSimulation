@@ -50,11 +50,11 @@ def example_timetable_R2() -> BookingTimetable:
     """R2: explicit weekly mask with some overlap between the two classes."""
     feasible_qik = np.zeros((2, 40), dtype=int)
 
-    # row 0 = Interventional
-    feasible_qik[0, [1, 2, 9, 10, 17, 18, 20, 24, 25, 26, 37, 38]] = 1
+    # Interventional feasible weekly blocks
+    feasible_qik[0, [25,26,29,37,38,39,24]] = 1
 
-    # row 1 = Angiography
-    feasible_qik[1, [1, 2, 3, 12, 13, 20, 21, 22, 25, 26, 27, 33, 34]] = 1
+    # Angiography feasible weekly blocks
+    feasible_qik[1, [11,12,22,25,26,27,33,34,38,39]] = 1
 
     return BookingTimetable(name="R2_placeholder", feasible_qik=feasible_qik)
 

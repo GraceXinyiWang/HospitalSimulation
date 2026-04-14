@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import time
 """
 LP-style SAA approximation for the hospital Qik optimization problem.
 
@@ -723,7 +723,11 @@ def solve_saa_hospital_qik(
 
 
 def main():
+    start_time = time.perf_counter()
     out = solve_saa_hospital_qik()
+    end_time = time.perf_counter()
+    elapsed = end_time - start_time
+    print(f"Running time: {elapsed:.6f} seconds")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     best_result_summary = pd.DataFrame(
@@ -737,6 +741,7 @@ def main():
                 "validation_std_H": out["best_validation_std_H"],
                 "x_opt": out["x_opt"].tolist(),
                 "qik_opt": out["qik_opt"].tolist(),
+                "total_run_time": elapsed
             }
         ]
     )
