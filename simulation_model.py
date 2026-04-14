@@ -642,8 +642,19 @@ def build_summary_dataframe(model: IROutpatientSchedulingSim, patients_df: pd.Da
         scheduled_count = 0
         completed_count = 0
     else:
-        # Z1 = average total wait from order arrival to actual procedure start.
-        z1 = float(patients_df["total_wait_to_proc_start"].dropna().mean())
+        # Z1 = average wait contribution over measured patients.
+        # Completed patients use the observed wait-to-procedure-start measure.
+        # Unscheduled patients use the censored wait
+        #     simulation_end_time - order_arrival_time
+        # only when that censored wait exceeds 28 days; otherwise they are
+        # excluded from the Z1 average.
+        z1_wait = patients_df["total_wait_to_proc_start"].copy()
+        unscheduled_mask = patients_df["actual_proc_start"].isna()
+        censored_wait = model.current_time - patients_df.loc[unscheduled_mask, "order_arrival_time"]
+        z1_wait.loc[unscheduled_mask] = np.nan
+        above_threshold_mask = censored_wait > 28.0 * MINUTES_PER_DAY
+        z1_wait.loc[censored_wait.index[above_threshold_mask]] = censored_wait.loc[above_threshold_mask]
+        z1 = float(z1_wait.mean())
         mean_booking_wait = float(patients_df["booking_wait"].dropna().mean())
         mean_prep_duration = float(patients_df["prep_duration"].dropna().mean())
         mean_lateness = float(patients_df["lateness"].dropna().mean())
@@ -659,10 +670,9 @@ def build_summary_dataframe(model: IROutpatientSchedulingSim, patients_df: pd.Da
     z3 = float(model.max_waiting_room_len)
 
     # Overall weighted objective.
-    # Z1 is thresholded in days: there is no penalty until average wait exceeds
-    # 28 days, then the excess is scaled relative to that 28-day target.
+    # Z1 is scaled directly in days relative to the 28-day target.
     z1_days = z1 / MINUTES_PER_DAY
-    z1_term = max(0.0, (z1_days - 28.0) / 28.0)
+    z1_term = z1_days / 28.0
 
     # Z2 is already reported in hours/week, so scale that directly.
     z2_term = z2 / 2.5

@@ -36,8 +36,8 @@ ARRIVAL_JSON_PATH = "arrival_model_params.json"
 SERVICE_JSON_PATH = "services rate.json"
 RAW_DATA_PATH = "df_selected.xlsx"
 
-NUM_WEEKS = 4
-WARMUP_WEEKS = 1
+NUM_WEEKS = 210
+WARMUP_WEEKS = 20
 BASE_SEED = 123
 
 SUBSET_ALPHA = 0.05
@@ -340,9 +340,6 @@ def subset_crn(k, alpha, n, seed, policy_indices=None):
 
 
     return keep_indices, summary_df
-
-
-
 
 
 # =========================================================

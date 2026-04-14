@@ -12,8 +12,8 @@ from Policy_defined import example_policy_R1
 from simulation_model import IROutpatientSchedulingSim, qik_to_dataframe, run_replications, summarize_replications
 
 # Example experiment settings.
-WARMUP_WEEKS = 4
-ONE_RUN_WEEKS = 52
+WARMUP_WEEKS = 20
+ONE_RUN_WEEKS = 210
 REPLICATION_WEEKS = 156
 NUM_REPLICATIONS = 100
 MINUTES_PER_DAY = 24.0 * 60.0
