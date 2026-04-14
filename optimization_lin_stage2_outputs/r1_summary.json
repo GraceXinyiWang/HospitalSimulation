@@ -1,5 +1,6 @@
 {
   "timetable": "R1",
+  "policy_name": "R1_fd1de83f_Lin",
   "search_seed": 123,
   "class_totals": [
     8,
@@ -8,10 +9,10 @@
   "best_mean_H_search": 2.0609249612664384,
   "best_rel_half_width": 0.2705758885610919,
   "best_eval_replications": 6,
-  "final_eval_reps": 8,
-  "final_eval_mean_H": 2.5619254641809377,
-  "final_eval_std_H": 0.49995872743809017,
-  "final_eval_mean_unscheduled": 280.625,
+  "final_eval_reps": 100,
+  "final_eval_mean_H": 2.3536670243171893,
+  "final_eval_std_H": 0.6092616737060362,
+  "final_eval_mean_unscheduled": 243.52,
   "best_qik_json": [
     [
       0,
@@ -97,5 +98,6 @@
       0,
       0
     ]
-  ]
+  ],
+  "total_run_time": 31.914304197998717
 }

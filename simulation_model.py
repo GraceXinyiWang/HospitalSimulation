@@ -654,7 +654,7 @@ def build_summary_dataframe(model: IROutpatientSchedulingSim, patients_df: pd.Da
         z1_wait.loc[unscheduled_mask] = np.nan
         above_threshold_mask = censored_wait > 28.0 * MINUTES_PER_DAY
         z1_wait.loc[censored_wait.index[above_threshold_mask]] = censored_wait.loc[above_threshold_mask]
-        z1 = float(z1_wait.mean())
+        z1 = float(z1_wait.mean()) / MINUTES_PER_DAY
         mean_booking_wait = float(patients_df["booking_wait"].dropna().mean())
         mean_prep_duration = float(patients_df["prep_duration"].dropna().mean())
         mean_lateness = float(patients_df["lateness"].dropna().mean())
@@ -669,16 +669,15 @@ def build_summary_dataframe(model: IROutpatientSchedulingSim, patients_df: pd.Da
     # Z3 = maximum number of patients waiting in the waiting-room queue.
     z3 = float(model.max_waiting_room_len)
 
-    # Overall weighted objective.
-    # Z1 is scaled directly in days relative to the 28-day target.
-    z1_days = z1 / MINUTES_PER_DAY
-    z1_term = z1_days / 28.0
+    # Overall weighted objective.S
+    # Z1 is already in days, scaled relative to the 28-day target.
+    z1_term = z1 / 28
 
     # Z2 is already reported in hours/week, so scale that directly.
     z2_term = z2 / 2.5
 
     # Z3 is scaled relative to a target max waiting-room queue length of 2.
-    z3_term = z3 / 2.0
+    z3_term = z3 / 2
 
     H = 0.6 * z1_term + 0.2 * z2_term + 0.2 * z3_term
 

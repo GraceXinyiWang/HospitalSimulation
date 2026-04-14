@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ':*)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('Optimization_Subset_Selection+KN_simplified.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('Optimization_Lin_Stage2.py'\\).read\\(\\)\\); print\\('OK'\\)\")"
+    ]
+  }
+}

@@ -36,16 +36,24 @@ from tqdm.auto import tqdm
 import Policy_defined
 from input_loader import load_all_ir_inputs
 from simulation_model import run_replications
+from optimization_common import (
+    ARRIVAL_JSON_PATH,
+    SERVICE_JSON_PATH,
+    RAW_DATA_PATH,
+    resolve_search_timetables as _resolve_search_timetables_common,
+    resolve_timetable_and_builders,
+    serialize_qik as _serialize_qik,
+    shared_daily_feasible_blocks as _shared_daily_feasible_blocks,
+    load_common_inputs,
+    make_policy_name,
+)
 
 
 # =========================================================
 # USER SETTINGS
 # =========================================================
-ARRIVAL_JSON_PATH = "arrival_model_params.json"
-SERVICE_JSON_PATH = "services rate.json"
-RAW_DATA_PATH = "df_selected.xlsx"
-
-NUM_WEEKS = 210
+TOTAL_RUN_LENGTH = 200
+NUM_WEEKS = 180 # run length minus warmup
 WARMUP_WEEKS = 20
 BASE_SEED = 123
 
@@ -56,7 +64,7 @@ KN_ALPHA = 0.05
 KN_INITIAL_REPS = 3
 KN_DELTA = 0.01
 
-FINAL_EVAL_REPS = 5
+FINAL_EVAL_REPS = 100
 
 SEARCH_TIMETABLE = "both"   # "R1", "R2", or "both"
 MAX_QIK_VALUE = 2  # Max value for each Qik entry (0, 1, or 2)``
@@ -64,7 +72,7 @@ SHARE_DAILY_QIK_ACROSS_CLASSES = True
 TOP_SUBSET_POLICIES = 10
 
 BASE_DIR = Path(__file__).resolve().parent
-OUTPUT_DIR = BASE_DIR / "optimization_subset_selection_kn_simplified_outputs4"
+OUTPUT_DIR = BASE_DIR / "optimization_subset_selection_kn_simplified_outputs5"
 
 
 
@@ -88,35 +96,18 @@ class CandidatePolicy:
 # =========================================================
 # LOAD INPUTS ONCE
 # =========================================================
-LOADED_INPUTS = load_all_ir_inputs(
-    arrival_json_path=ARRIVAL_JSON_PATH,
-    service_json_path=SERVICE_JSON_PATH,
-    raw_data_path=RAW_DATA_PATH,
-)
+LOADED_INPUTS = load_common_inputs()
 
 
 # =========================================================
 # BUILD CANDIDATE POLICIES
 # =========================================================
 def _resolve_search_timetables():
-    search_value = str(SEARCH_TIMETABLE).strip().upper()
-
-    if search_value == "BOTH":
-        return ["R1", "R2"]
-    if search_value in {"R1", "R2"}:
-        return [search_value]
-
-    raise ValueError("SEARCH_TIMETABLE must be 'R1', 'R2', or 'both'.")
+    return _resolve_search_timetables_common(SEARCH_TIMETABLE)
 
 
 def _resolve_search_components(search_timetable):
-    if search_timetable == "R1":
-        timetable = Policy_defined.example_timetable_R1()
-        build_policy_func = Policy_defined.build_bruteforce_policy_R1
-    elif search_timetable == "R2":
-        timetable = Policy_defined.example_timetable_R2()
-        build_policy_func = Policy_defined.build_bruteforce_policy_R2
-
+    timetable, build_policy_func, _ = resolve_timetable_and_builders(search_timetable)
     return timetable, build_policy_func
 
 
@@ -145,7 +136,7 @@ def _build_candidate_policies(search_timetable):
         candidates.append(
             CandidatePolicy(
                 system_id=idx,
-                name=f"{search_timetable}_cand_{idx}",
+                name=make_policy_name(search_timetable, "SubsetKN", weekly_qik),
                 daily_qik=daily_qik,
                 weekly_qik=weekly_qik,
                 build_policy=partial(build_policy_func, daily_qik=daily_qik),
@@ -189,17 +180,6 @@ def _progress_desc(stage: str) -> str:
         return stage
     return f"{ACTIVE_TIMETABLE} {stage}"
 
-
-def _shared_daily_feasible_blocks(timetable):
-    weekly_mask = np.asarray(timetable.feasible_qik, dtype=int)
-    stacked = np.stack(
-        [weekly_mask[:, 8 * day : 8 * (day + 1)] for day in range(5)],
-        axis=0,
-    )
-
-    # Shared block k is free if at least one class can use it on at least one weekday.
-    feasible_daily_by_class = stacked.max(axis=0)
-    return feasible_daily_by_class.max(axis=0)
 
 
 def _generate_shared_daily_qik_candidates(
@@ -277,9 +257,6 @@ def _save_csv(df: pd.DataFrame, filename: str) -> Path:
     df.to_csv(output_path, index=False)
     return output_path
 
-
-def _serialize_qik(qik: np.ndarray) -> str:
-    return json.dumps(np.asarray(qik, dtype=int).tolist())
 
 
 def _policy_export_table(policy_indices):
@@ -535,6 +512,9 @@ def final_eval_table(policy_indices, subset_df, kn_df, num_replications, seed):
                 "std_H_eval": float(h_values.std(ddof=1)) if len(h_values) > 1 else 0.0,
                 "min_H_eval": float(h_values.min()),
                 "max_H_eval": float(h_values.max()),
+                "mean_Z1_eval": float(rep_df["Z1_wait_time"].mean()),
+                "mean_Z2_eval": float(rep_df["Z2_overtime"].mean()),
+                "mean_Z3_eval": float(rep_df["Z3_congestion"].mean()),
                 "final_eval_reps": int(num_replications),
             }
         )
@@ -556,6 +536,9 @@ def final_eval_table(policy_indices, subset_df, kn_df, num_replications, seed):
         "std_H_eval",
         "min_H_eval",
         "max_H_eval",
+        "mean_Z1_eval",
+        "mean_Z2_eval",
+        "mean_Z3_eval",
         "final_eval_reps",
         "daily_qik_json",
         "weekly_qik_json",
@@ -655,7 +638,7 @@ def _run_active_search():
         alpha=KN_ALPHA,
         n0=KN_INITIAL_REPS,
         delta=KN_DELTA,
-        seed=BASE_SEED + 10_000,
+        seed=BASE_SEED,
         policy_indices=subset,
     )
     best_system = result["Best"]
@@ -712,9 +695,11 @@ def _run_active_search():
         f"{ACTIVE_TIMETABLE.lower()}_top_{len(final_eval_df)}_subset_policies.png",
     )
 
-    best_eval_mean_h = float(
-        final_eval_df.loc[final_eval_df["system"] == best_system, "mean_H_eval"].iloc[0]
-    )
+    best_row = final_eval_df.loc[final_eval_df["system"] == best_system].iloc[0]
+    best_eval_mean_h = float(best_row["mean_H_eval"])
+    best_eval_mean_z1 = float(best_row["mean_Z1_eval"])
+    best_eval_mean_z2 = float(best_row["mean_Z2_eval"])
+    best_eval_mean_z3 = float(best_row["mean_Z3_eval"])
 
     print("\nFinal evaluation statistics for subset-selected policies")
     _print_df_preview(
@@ -745,6 +730,9 @@ def _run_active_search():
         "best_policy_name": best_candidate.name,
         "best_mean_H": best_mean_h,
         "best_mean_H_eval": best_eval_mean_h,
+        "best_mean_Z1_eval": best_eval_mean_z1,
+        "best_mean_Z2_eval": best_eval_mean_z2,
+        "best_mean_Z3_eval": best_eval_mean_z3,
         "final_results_df": final_eval_df,
         "subset_csv_path": str(subset_csv_path),
         "kn_csv_path": str(kn_csv_path),
@@ -777,6 +765,9 @@ def main():
                 "policy": item["best_policy_name"],
                 "best_mean_H_kn": item["best_mean_H"],
                 "best_mean_H_eval": item["best_mean_H_eval"],
+                "best_mean_Z1_eval": item["best_mean_Z1_eval"],
+                "best_mean_Z2_eval": item["best_mean_Z2_eval"],
+                "best_mean_Z3_eval": item["best_mean_Z3_eval"],
                 "elapsed_seconds": item["elapsed_seconds"],
                 "subset_csv_path": item["subset_csv_path"],
                 "kn_csv_path": item["kn_csv_path"],

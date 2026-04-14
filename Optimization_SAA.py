@@ -33,13 +33,22 @@ from simulation_model import (
     sample_from_spec,
     weekly_block_metadata,
 )
+from optimization_common import (
+    ARRIVAL_JSON_PATH,
+    SERVICE_JSON_PATH,
+    RAW_DATA_PATH,
+    resolve_search_timetables as _resolve_search_timetables,
+    resolve_policy_builder as _resolve_search_components,
+    distribution_mean as _distribution_mean_minutes,
+    daily_feasible_positions as _daily_feasible_positions,
+    shared_daily_feasible_blocks as _shared_daily_feasible_blocks_raw,
+    full_week_feasible_positions as _full_week_feasible_positions,
+    load_common_inputs,
+    make_policy_name,
+)
 
-
-ARRIVAL_JSON_PATH = "arrival_model_params.json"
-SERVICE_JSON_PATH = "services rate.json"
-RAW_DATA_PATH = "df_selected.xlsx"
-
-NUM_WEEKS = 210
+TOTAL_RUN_LENGTH = 200
+NUM_WEEKS = 180
 WARMUP_WEEKS = 20
 BASE_SEED = 123
 
@@ -49,23 +58,20 @@ SHARE_DAILY_QIK_ACROSS_CLASSES = False
 MAX_QIK_VALUE = 2
 
 N_SAA = 20
-VALIDATION_REPLICATIONS = 10
+VALIDATION_REPLICATIONS = 100
 OUTPUT_DIR = Path("SAA_output_folder")
 
 STAFFED_MINUTES_PER_DAY = 8.0 * MINUTES_PER_HOUR
 SAFE_STARTS_PER_BLOCK = 1.0
 
 
-LOADED_INPUTS = load_all_ir_inputs(
-    arrival_json_path=ARRIVAL_JSON_PATH,
-    service_json_path=SERVICE_JSON_PATH,
-    raw_data_path=RAW_DATA_PATH,
-)
+LOADED_INPUTS = load_common_inputs()
 
 
 @dataclass
 class ApproximationResult:
     timetable: str
+    policy_name: str
     solver_message: str
     surrogate_objective: float
     surrogate_wait_component: float
@@ -85,53 +91,8 @@ class ApproximationResult:
     validation_mean_unscheduled: float | None
 
 
-def _resolve_search_timetables(search_timetable: str):
-    value = str(search_timetable).strip().upper()
-    if value == "BOTH":
-        return ["R1", "R2"]
-    if value in {"R1", "R2"}:
-        return [value]
-    raise ValueError("search_timetable must be 'R1', 'R2', or 'both'.")
-
-
-def _resolve_search_components(search_timetable: str, policy_space: str):
-    policy_space = str(policy_space).strip().lower()
-    value = str(search_timetable).strip().upper()
-
-    if value == "R1":
-        timetable = Policy_defined.example_timetable_R1()
-        daily_builder = Policy_defined.build_bruteforce_policy_R1
-        weekly_builder = Policy_defined.build_general_policy_R1
-    elif value == "R2":
-        timetable = Policy_defined.example_timetable_R2()
-        daily_builder = Policy_defined.build_bruteforce_policy_R2
-        weekly_builder = Policy_defined.build_general_policy_R2
-    else:
-        raise ValueError("search_timetable must be 'R1' or 'R2'.")
-
-    if policy_space == "daily_repeated":
-        return timetable, daily_builder
-    if policy_space == "full_week":
-        return timetable, weekly_builder
-    raise ValueError("policy_space must be 'daily_repeated' or 'full_week'.")
-
-
-def _daily_feasible_positions(timetable: BookingTimetable):
-    weekly_mask = np.asarray(timetable.feasible_qik, dtype=int)
-    stacked = np.stack([weekly_mask[:, 8 * d : 8 * (d + 1)] for d in range(5)], axis=0)
-    feasible_daily = stacked.max(axis=0)
-    return list(zip(*np.where(feasible_daily == 1)))
-
-
 def _shared_daily_feasible_blocks(timetable: BookingTimetable):
-    weekly_mask = np.asarray(timetable.feasible_qik, dtype=int)
-    stacked = np.stack([weekly_mask[:, 8 * d : 8 * (d + 1)] for d in range(5)], axis=0)
-    feasible_daily_by_class = stacked.max(axis=0)
-    return list(np.where(feasible_daily_by_class.max(axis=0) == 1)[0])
-
-
-def _full_week_feasible_positions(timetable: BookingTimetable):
-    return list(zip(*np.where(np.asarray(timetable.feasible_qik, dtype=int) == 1)))
+    return list(np.where(_shared_daily_feasible_blocks_raw(timetable) == 1)[0])
 
 
 def _decision_positions(timetable: BookingTimetable, policy_space: str, share_daily_qik_across_classes: bool):
@@ -228,25 +189,6 @@ def _round_x(x_lp: np.ndarray, max_qik_value: int):
     x_int = np.rint(np.asarray(x_lp, dtype=float)).astype(int)
     return np.clip(x_int, 0, int(max_qik_value))
 
-
-def _distribution_mean_minutes(spec) -> float:
-    dist = str(spec.dist).strip().lower()
-    p = spec.params
-    if dist in {"deterministic", "constant"}:
-        return float(p["value"])
-    if dist == "uniform":
-        return 0.5 * (float(p["low"]) + float(p["high"]))
-    if dist in {"exponential", "expon"}:
-        return float(p["mean"])
-    if dist == "gamma":
-        return float(p["shape"]) * float(p["scale"])
-    if dist == "lognormal":
-        return math.exp(float(p["mu"]) + 0.5 * float(p["sigma"]) ** 2)
-    if dist == "weibull":
-        return float(p.get("loc", 0.0)) + float(p["scale"]) * math.gamma(1.0 + 1.0 / float(p["shape"]))
-    if dist == "empirical":
-        return float(np.mean(np.asarray(p["samples"], dtype=float)))
-    raise ValueError(f"Unsupported distribution for mean calculation: {spec.dist}")
 
 
 def _parse_bin_start_hours(bin_index: Sequence[object], fallback_start_hour: int):
@@ -440,7 +382,7 @@ def _solve_surrogate_lp_for_timetable(
     overtime_coeff = 0.2 / (2.5 * MINUTES_PER_HOUR)
     for weekday in range(5):
         c_obj[overtime_var(weekday)] = overtime_coeff
-    c_obj[congestion_var] = 0.2 / 2.0
+    c_obj[congestion_var] = 0.2 / 2
 
     rows = []
     cols = []
@@ -528,6 +470,7 @@ def _solve_surrogate_lp_for_timetable(
 
     wait_component = 0.0
     for scenario in range(num_scenarios):
+        #SCALE 28 NOTE: The wait component is scaled by the average number of arrivals per scenario, so that the overall objective is on a similar scale to the simulation H metric. The gap_to_next factor converts from backlog counts to waiting time in days.
         wait_scale = 0.6 / (28.0 * MINUTES_PER_DAY * float(measured_arrivals[scenario]) * num_scenarios)
         for block in range(num_blocks):
             if measured_mask[block]:
@@ -643,8 +586,10 @@ def solve_saa_hospital_qik(
             num_replications=validation_replications,
             seed=seed + 10_000,
         )
+        policy_name = make_policy_name(timetable_name, "SAA", lp_out["weekly_qik_rounded"])
         result = ApproximationResult(
             timetable=timetable_name,
+            policy_name=policy_name,
             solver_message=lp_out["solver_message"],
             surrogate_objective=lp_out["objective"],
             surrogate_wait_component=lp_out["wait_component"],
@@ -666,6 +611,7 @@ def solve_saa_hospital_qik(
         results.append(result)
 
         print("\n" + "=" * 80)
+        print(f"Policy name = {result.policy_name}")
         print(f"Timetable = {timetable_name}")
         print(f"Policy space = {policy_space}")
         print(f"Solver message = {result.solver_message}")
@@ -691,6 +637,7 @@ def solve_saa_hospital_qik(
         [
             {
                 "timetable": item.timetable,
+                "policy_name": item.policy_name,
                 "surrogate_objective": item.surrogate_objective,
                 "surrogate_wait_component": item.surrogate_wait_component,
                 "surrogate_overtime_component": item.surrogate_overtime_component,
@@ -713,10 +660,14 @@ def solve_saa_hospital_qik(
         "qik_opt": best_result.qik_input_rounded.copy(),
         "weekly_qik_opt": best_result.weekly_qik_rounded.copy(),
         "best_timetable": best_result.timetable,
+        "best_policy_name": best_result.policy_name,
         "best_validation_mean_H": best_result.validation_mean_H,
         "best_validation_min_H": best_result.validation_min_H,
         "best_validation_max_H": best_result.validation_max_H,
         "best_validation_std_H": best_result.validation_std_H,
+        "best_validation_mean_Z1": best_result.validation_mean_Z1,
+        "best_validation_mean_Z2": best_result.validation_mean_Z2,
+        "best_validation_mean_Z3": best_result.validation_mean_Z3,
         "summary_table": summary_table,
         "all_results": results,
     }
@@ -734,11 +685,15 @@ def main():
         [
             {
                 "best_timetable": out["best_timetable"],
+                "best_policy_name": out["best_policy_name"],
                 "surrogate_objective": out["surrogate_objective"],
                 "validation_mean_H": out["best_validation_mean_H"],
                 "validation_min_H": out["best_validation_min_H"],
                 "validation_max_H": out["best_validation_max_H"],
                 "validation_std_H": out["best_validation_std_H"],
+                "validation_mean_Z1": out["best_validation_mean_Z1"],
+                "validation_mean_Z2": out["best_validation_mean_Z2"],
+                "validation_mean_Z3": out["best_validation_mean_Z3"],
                 "x_opt": out["x_opt"].tolist(),
                 "qik_opt": out["qik_opt"].tolist(),
                 "total_run_time": elapsed
@@ -761,6 +716,7 @@ def main():
 
     print("\n" + "=" * 80)
     print("Overall best LP-SAA approximation result")
+    print(f"Best policy name: {out['best_policy_name']}")
     print(f"Best timetable: {out['best_timetable']}")
     print(f"Optimal rounded x: {out['x_opt'].tolist()}")
     print(f"Rounded Qik input: {out['qik_opt'].tolist()}")
@@ -771,6 +727,9 @@ def main():
         print(f"Validation min H:  {out['best_validation_min_H']:.6f}")
         print(f"Validation max H:  {out['best_validation_max_H']:.6f}")
         print(f"Validation std H:  {out['best_validation_std_H']:.6f}")
+        print(f"Validation mean Z1: {out['best_validation_mean_Z1']:.6f}")
+        print(f"Validation mean Z2: {out['best_validation_mean_Z2']:.6f}")
+        print(f"Validation mean Z3: {out['best_validation_mean_Z3']:.6f}")
     print(f"Saved summary CSV: {best_result_summary_path}")
     print(f"Saved weekly Qik CSV: {weekly_qik_path}")
     print(f"Saved table CSV: {summary_table_path}")

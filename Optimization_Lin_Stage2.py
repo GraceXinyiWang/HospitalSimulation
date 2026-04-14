@@ -41,6 +41,17 @@ from scipy import stats
 
 import Policy_defined
 from input_loader import DistributionSpec, LoadedIRInputs, load_all_ir_inputs
+from optimization_common import (
+    ARRIVAL_JSON_PATH,
+    SERVICE_JSON_PATH,
+    RAW_DATA_PATH,
+    resolve_search_timetables as _resolve_search_list,
+    resolve_timetable as _resolve_timetable,
+    serialize_qik as _serialize_qik,
+    distribution_mean as _distribution_mean,
+    load_common_inputs,
+    make_policy_name,
+)
 from simulation_model import (
     CLASS_NAMES,
     CLASS_TO_INDEX,
@@ -56,17 +67,14 @@ from simulation_model import (
 MINUTES_PER_HOUR = 60.0
 MINUTES_PER_DAY = 24.0 * 60.0
 
-ARRIVAL_JSON_PATH = "arrival_model_params.json"
-SERVICE_JSON_PATH = "services rate.json"
-RAW_DATA_PATH = "df_selected.xlsx"
-
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "optimization_lin_stage2_outputs"
 
 
 @dataclass
 class Stage2Config:
-    num_weeks: int = 210
+    total_run_length: int = 200
+    num_weeks: int = 180 # run length minus warmup
     warmup_weeks: int = 20
     base_seed: int = 123
 
@@ -91,7 +99,7 @@ class Stage2Config:
     inverse_impact_floor: float = 0.05
     unscheduled_penalty: float = 0.25
 
-    final_eval_reps: int = 8
+    final_eval_reps: int = 100
 
 
 @dataclass
@@ -104,47 +112,6 @@ class ScheduleEvaluation:
     block_badness: np.ndarray
     block_usage_ratio: np.ndarray
     total_replications: int
-
-
-def _resolve_timetable(search_timetable: str):
-    value = str(search_timetable).strip().upper()
-    if value == "R1":
-        return Policy_defined.example_timetable_R1()
-    if value == "R2":
-        return Policy_defined.example_timetable_R2()
-    raise ValueError("search_timetable must be 'R1' or 'R2'.")
-
-
-def _serialize_qik(qik: np.ndarray) -> str:
-    return json.dumps(np.asarray(qik, dtype=int).tolist(), separators=(",", ":"))
-
-
-def _distribution_mean(spec: DistributionSpec) -> float:
-    dist = str(spec.dist).strip().lower()
-    params = spec.params
-
-    if dist in {"deterministic", "constant"}:
-        return float(params["value"])
-    if dist == "empirical":
-        samples = np.asarray(params["samples"], dtype=float)
-        if samples.size == 0:
-            return 0.0
-        return float(samples.mean())
-    if dist == "uniform":
-        return 0.5 * (float(params["low"]) + float(params["high"]))
-    if dist in {"exponential", "expon"}:
-        return float(params["mean"])
-    if dist == "gamma":
-        return float(params["shape"]) * float(params["scale"])
-    if dist == "lognormal":
-        return float(math.exp(float(params["mu"]) + 0.5 * float(params["sigma"]) ** 2))
-    if dist == "weibull":
-        shape = float(params["shape"])
-        scale = float(params["scale"])
-        loc = float(params.get("loc", 0.0))
-        return float(loc + scale * math.gamma(1.0 + 1.0 / shape))
-
-    raise ValueError(f"Unsupported distribution for mean calculation: {spec.dist}")
 
 
 def _procedure_mean_minutes(loaded_inputs: LoadedIRInputs) -> float:
@@ -282,7 +249,7 @@ def _paired_patient_impact_table(
     scheduled_df["impact"] = (
         0.6 * ((scheduled_df["total_wait_to_proc_start"].fillna(0.0) / MINUTES_PER_DAY) / 28.0)
         + 0.2 * ((scheduled_df["patient_overtime_min"] / MINUTES_PER_HOUR) / (2.5 * num_weeks))
-        + 0.2 * (scheduled_df["queue_proxy"] / 2.0)
+        + 0.2 * (scheduled_df["queue_proxy"] / 2)
     )
 
     for class_name, group in scheduled_df.groupby("category"):
@@ -692,8 +659,11 @@ def optimize_timetable(
     best_qik_df = qik_to_dataframe(best_eval.qik)
     best_qik_df.insert(0, "timetable", timetable.name)
 
+    policy_name = make_policy_name(timetable.name, "Lin", best_eval.qik)
+
     return {
         "timetable": timetable.name,
+        "policy_name": policy_name,
         "class_totals": class_totals,
         "initial_qik": initial_qik,
         "initial_qik_df": initial_qik_df,
@@ -723,6 +693,7 @@ def save_result(result: dict, config: Stage2Config) -> dict:
     best_eval = result["best_eval"]
     summary_payload = {
         "timetable": result["timetable"],
+        "policy_name": result["policy_name"],
         "search_seed": int(result["search_seed"]),
         "class_totals": np.asarray(result["class_totals"], dtype=int).tolist(),
         "best_mean_H_search": float(best_eval.mean_h),
@@ -735,6 +706,7 @@ def save_result(result: dict, config: Stage2Config) -> dict:
         else 0.0,
         "final_eval_mean_unscheduled": float(result["final_rep_df"]["unscheduled_count"].mean()),
         "best_qik_json": np.asarray(best_eval.qik, dtype=int).tolist(),
+        "total_run_time": result.get("total_run_time", 0.0),
     }
 
     with open(summary_path, "w", encoding="utf-8") as f:
@@ -754,27 +726,20 @@ def _summary_row(result: dict) -> dict:
     best_eval = result["best_eval"]
     return {
         "timetable": result["timetable"],
+        "policy_name": result["policy_name"],
         "class_totals_json": json.dumps(np.asarray(result["class_totals"], dtype=int).tolist()),
         "search_mean_H": float(best_eval.mean_h),
         "search_rel_half_width": float(best_eval.rel_half_width),
         "search_eval_reps": int(best_eval.total_replications),
         "final_mean_H": float(final_rep_df["H"].mean()),
         "final_std_H": float(final_rep_df["H"].std(ddof=1)) if len(final_rep_df) > 1 else 0.0,
-        "final_mean_Z1_days": float(final_rep_df["Z1_wait_time"].mean() / MINUTES_PER_DAY),
+        "final_mean_Z1_days": float(final_rep_df["Z1_wait_time"].mean()),
         "final_mean_Z2_hours": float(final_rep_df["Z2_overtime"].mean()),
         "final_mean_Z3": float(final_rep_df["Z3_congestion"].mean()),
         "final_mean_unscheduled": float(final_rep_df["unscheduled_count"].mean()),
         "best_qik_json": _serialize_qik(best_eval.qik),
+        "total_run_time": result.get("total_run_time", 0.0),
     }
-
-
-def _resolve_search_list(search_timetable: str) -> list[str]:
-    value = str(search_timetable).strip().upper()
-    if value == "BOTH":
-        return ["R1", "R2"]
-    if value in {"R1", "R2"}:
-        return [value]
-    raise ValueError("search_timetable must be 'R1', 'R2', or 'both'.")
 
 
 def parse_args() -> argparse.Namespace:
@@ -784,7 +749,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup-weeks", type=int, default=20)
     parser.add_argument("--min-eval-reps", type=int, default=3)
     parser.add_argument("--max-eval-reps", type=int, default=6)
-    parser.add_argument("--final-eval-reps", type=int, default=8)
+    parser.add_argument("--final-eval-reps", type=int, default=100)
     parser.add_argument("--iterations", type=int, default=20)
     parser.add_argument("--demand-buffer", type=float, default=1.25)
     parser.add_argument("--max-q-per-block", type=int, default=3)
@@ -811,27 +776,26 @@ def main() -> None:
         restart_after=args.restart_after,
     )
 
-    loaded_inputs = load_all_ir_inputs(
-        arrival_json_path=ARRIVAL_JSON_PATH,
-        service_json_path=SERVICE_JSON_PATH,
-        raw_data_path=RAW_DATA_PATH,
-    )
+    loaded_inputs = load_common_inputs()
    
     all_results = []
     for search_timetable in _resolve_search_list(args.timetable):
         print("\n" + "=" * 80)
         print(f"Running stage-II search for {search_timetable}")
 
+        tt_start = time.perf_counter()
         result = optimize_timetable(
             search_timetable=search_timetable,
             loaded_inputs=loaded_inputs,
             config=config,
         )
+        result["total_run_time"] = time.perf_counter() - tt_start
         paths = save_result(result, config)
 
         summary_row = _summary_row(result)
         all_results.append(summary_row)
 
+        print(f"Policy name = {result['policy_name']}")
         print(f"Target weekly class totals = {np.asarray(result['class_totals'], dtype=int).tolist()}")
         print(
             f"Search best mean H = {summary_row['search_mean_H']:.4f} "
