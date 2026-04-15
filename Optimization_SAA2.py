@@ -61,7 +61,7 @@ N_SAA = 50
 SCREENING_REPLICATIONS = 5
 VALIDATION_REPLICATIONS = 100
 NUM_ROUNDING_CANDIDATES = 20
-OUTPUT_DIR = Path("SAA2_output_folder")
+OUTPUT_DIR = Path("optimization_SAA2_outputs")
 
 # The procedure room is staffed 8-12 and 13-17 = 7 hours effective per day.
 EFFECTIVE_STAFFED_MINUTES_PER_DAY = 7.0 * MINUTES_PER_HOUR
