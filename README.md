@@ -51,7 +51,7 @@ The model depends primarily on `input_loader.py` to load the fitted arrival and 
 This repository includes three optimization approaches for searching for good scheduling policies:
 
 - `Optimization_SAA2.py`: sample average approximation based optimization  -- 15 minutes to run
-- `Optimization_Subset_Selection+KN_simplified.py`: subset-selection and Kim-Nelson based ranking-and-selection approach -- 18 minutes to run
+- `Optimization_Subset_Selection+KN_simplified.py`: subset-selection and Kim-Nelson based ranking-and-selection approach -- 3 hours to run
 - `Optimization_Lin_Stage2.py`: linearized stage-2 improvement procedure   -- 2 minutes to run
 
 Their outputs are saved in:
