@@ -50,9 +50,9 @@ The model depends primarily on `input_loader.py` to load the fitted arrival and 
 
 This repository includes three optimization approaches for searching for good scheduling policies:
 
-- `Optimization_SAA2.py`: sample average approximation based optimization  -- 15 minutes to run
-- `Optimization_Subset_Selection+KN_simplified.py`: subset-selection and Kim-Nelson based ranking-and-selection approach -- 3 hours to run
-- `Optimization_Lin_Stage2.py`: linearized stage-2 improvement procedure   -- 2 minutes to run
+- `Optimization_SAA2.py`: sample average approximation based optimization  -- about 15 minutes to run
+- `Optimization_Subset_Selection+KN_simplified.py`: subset-selection and Kim-Nelson based ranking-and-selection approach -- about 3 hours to run
+- `Optimization_Lin_Stage2.py`: linearized stage-2 improvement procedure   -- about 2 minutes to run
 
 Their outputs are saved in:
 
@@ -60,6 +60,7 @@ Their outputs are saved in:
 - `optimization_subset_selection_kn_simplified_outputs5/`
 - `optimization_lin_stage2_outputs/`
 
+Notice the estimated running time depends on your environment, this is the running time based on the author's computer.
 ## 4. Policy Evaluation and Result Analysis
 
 - `evaluate_policy.py` re-evaluates the selected policies under a common validation setting and stores the full replication-level outputs in `evaluate_policy/`.
