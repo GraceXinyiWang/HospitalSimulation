@@ -768,7 +768,7 @@ def _summary_row(result: dict) -> dict:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the Lin et al. stage-II schedule search.")
     parser.add_argument("--timetable", default="both", help="R1, R2, or both")
-    parser.add_argument("--num-weeks", type=int, default=210)
+    parser.add_argument("--num-weeks", type=int, default=180)
     parser.add_argument("--warmup-weeks", type=int, default=20)
     parser.add_argument("--min-eval-reps", type=int, default=3)
     parser.add_argument("--max-eval-reps", type=int, default=6)

@@ -1,18 +1,18 @@
 {
   "timetable": "R2",
-  "policy_name": "R2_f887d3a4_Lin",
-  "search_seed": 10123,
+  "policy_name": "R2_34b04524_Lin",
+  "search_seed": 123,
   "class_totals": [
     6,
     14
   ],
-  "best_mean_H_search": 1.01996831278457,
-  "best_rel_half_width": 0.0908891426962815,
-  "best_eval_replications": 3,
+  "best_mean_H_search": 0.9614043275423314,
+  "best_rel_half_width": 0.06384539669851769,
+  "best_eval_replications": 4,
   "final_eval_reps": 100,
-  "final_eval_mean_H": 1.0494770248217595,
-  "final_eval_std_H": 0.04105352732974885,
-  "final_eval_mean_unscheduled": 20.83,
+  "final_eval_mean_H": 0.9637208061172029,
+  "final_eval_std_H": 0.0716101978612883,
+  "final_eval_mean_unscheduled": 19.11,
   "best_qik_json": [
     [
       0,
@@ -69,7 +69,7 @@
       0,
       0,
       2,
-      2,
+      3,
       0,
       0,
       0,
@@ -79,19 +79,19 @@
       0,
       0,
       0,
-      2,
-      0,
-      0,
-      2,
-      0,
-      2,
-      0,
-      0,
-      0,
+      1,
       0,
       0,
       2,
       0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      2,
+      1,
       0,
       0,
       0,
@@ -99,5 +99,5 @@
       0
     ]
   ],
-  "total_run_time": 45.102158000008785
+  "total_run_time": 37.998920400001225
 }

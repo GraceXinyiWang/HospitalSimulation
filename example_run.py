@@ -13,7 +13,7 @@ from simulation_model import IROutpatientSchedulingSim, qik_to_dataframe, run_re
 
 # Example experiment settings.
 WARMUP_WEEKS = 20
-ONE_RUN_WEEKS = 210
+ONE_RUN_WEEKS = 200
 REPLICATION_WEEKS = 156
 NUM_REPLICATIONS = 100
 PRINT_LABEL_MAP = {
