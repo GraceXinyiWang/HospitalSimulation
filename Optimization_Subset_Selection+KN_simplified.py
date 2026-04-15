@@ -59,7 +59,7 @@ KN_ALPHA = 0.05
 KN_INITIAL_REPS = 3
 KN_DELTA = 0.01
 
-FINAL_EVAL_REPS = 100
+FINAL_EVAL_REPS = 5
 
 SEARCH_TIMETABLE = "both"   # "R1", "R2", or "both"
 MAX_QIK_VALUE = 2  # Max value for each Qik entry (0, 1, or 2)``
