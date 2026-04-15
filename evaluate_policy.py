@@ -4,23 +4,10 @@ Evaluate saved policies and export per-replication simulation results.
 Current behavior:
     - If run with no arguments, the script evaluates the default six selected
       policies (SAA2, KN+Subset, and Lin for R1/R2) using the current defaults.
-    - If --policy-name is provided, the script looks up that policy in the known
-      output folders and evaluates it.
-    - If --qik-json is provided, the script evaluates the supplied weekly Qik
-      directly.
 
 Usage examples:
     # Run the default six-policy batch:
     python evaluate_policy.py
-
-    # Look up one policy by name from the output folders:
-    python evaluate_policy.py --policy-name R1_c5d534fd_SubsetKN
-
-    # Provide weekly Qik directly:
-    python evaluate_policy.py --timetable R1 --qik-json '[[0,2,0,1,...],[0,2,0,1,...]]'
-
-    # Custom replications / seed for one named policy:
-    python evaluate_policy.py --policy-name R1_c5d534fd_SubsetKN --reps 200 --seed 42
 """
 from __future__ import annotations
 
