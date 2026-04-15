@@ -603,7 +603,8 @@ def optimize_timetable(
             "schedule_json": _serialize_qik(current_eval.qik),
         }
     ]
-
+    # Stopping Criteria when the nax iteration is achieved 
+    # or when the neighborhood search can no longer generate and accept improving candidate schedules.
     iteration = 0
     while iteration < int(config.max_iterations) and psize <= pmax_size:
         iteration += 1

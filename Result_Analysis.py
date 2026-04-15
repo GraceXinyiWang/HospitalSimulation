@@ -10,6 +10,13 @@ import pandas as pd
 EVALUATE_POLICY_DIR = Path("evaluate_policy")
 ANALYSIS_OUTPUT_DIR = Path("result_analysis_outputs")
 Z_VALUE_95 = 1.96
+BASELINE_POLICY_NAME = "R1_840a3320_SAA2"
+MERGED_PLOT_GROUPS = [
+    (
+        ("R1_3d503d0e_Lin", "R1_c5d534fd_SubsetKN"),
+        "Lin_Stage2 / KN+Subset - R1",
+    ),
+]
 
 
 def _ensure_output_dir() -> Path:
@@ -98,11 +105,45 @@ def _save_summary_table(summary_df: pd.DataFrame) -> Path:
     return output_path
 
 
+def _build_plot_entries(summary_df: pd.DataFrame, policy_tables: dict[str, pd.DataFrame]) -> list[dict]:
+    entries: list[dict] = []
+    used_policy_names: set[str] = set()
+
+    for policy_names, label in MERGED_PLOT_GROUPS:
+        if all(policy_name in summary_df["policy_name"].values for policy_name in policy_names):
+            base_policy_name = policy_names[0]
+            base_row = summary_df.loc[summary_df["policy_name"] == base_policy_name].iloc[0]
+            entries.append(
+                {
+                    "policy_name": base_policy_name,
+                    "label": label,
+                    "row": base_row,
+                    "h_values": policy_tables[base_policy_name]["H"].to_numpy(dtype=float),
+                }
+            )
+            used_policy_names.update(policy_names)
+
+    for row in summary_df.itertuples(index=False):
+        if row.policy_name in used_policy_names:
+            continue
+        current_row = summary_df.loc[summary_df["policy_name"] == row.policy_name].iloc[0]
+        entries.append(
+            {
+                "policy_name": row.policy_name,
+                "label": row.policy,
+                "row": current_row,
+                "h_values": policy_tables[row.policy_name]["H"].to_numpy(dtype=float),
+            }
+        )
+
+    return entries
+
+
 def _save_box_plot(summary_df: pd.DataFrame, policy_tables: dict[str, pd.DataFrame]) -> Path:
     output_path = _ensure_output_dir() / "evaluate_policy_H_boxplot.png"
-    ordered_policy_names = summary_df["policy_name"].tolist()
-    labels = summary_df["policy"].tolist()
-    box_data = [policy_tables[policy_name]["H"].to_numpy(dtype=float) for policy_name in ordered_policy_names]
+    plot_entries = _build_plot_entries(summary_df, policy_tables)
+    labels = [entry["label"] for entry in plot_entries]
+    box_data = [entry["h_values"] for entry in plot_entries]
 
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.boxplot(box_data, tick_labels=labels, patch_artist=True)
@@ -117,13 +158,17 @@ def _save_box_plot(summary_df: pd.DataFrame, policy_tables: dict[str, pd.DataFra
     return output_path
 
 
-def _save_mean_ci_plot(summary_df: pd.DataFrame) -> Path:
+def _save_mean_ci_plot(summary_df: pd.DataFrame, policy_tables: dict[str, pd.DataFrame]) -> Path:
     output_path = _ensure_output_dir() / "evaluate_policy_H_mean_CI95.png"
 
-    x = np.arange(len(summary_df))
-    y = summary_df["mean_H"].to_numpy(dtype=float)
-    yerr = (summary_df["CI95_upper_H"] - summary_df["mean_H"]).to_numpy(dtype=float)
-    labels = summary_df["policy"].tolist()
+    plot_entries = _build_plot_entries(summary_df, policy_tables)
+    x = np.arange(len(plot_entries))
+    y = np.array([float(entry["row"].mean_H) for entry in plot_entries], dtype=float)
+    yerr = np.array(
+        [float(entry["row"].CI95_upper_H) - float(entry["row"].mean_H) for entry in plot_entries],
+        dtype=float,
+    )
+    labels = [entry["label"] for entry in plot_entries]
 
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.errorbar(
@@ -148,12 +193,70 @@ def _save_mean_ci_plot(summary_df: pd.DataFrame) -> Path:
     return output_path
 
 
+def pairwise_comparison(
+    summary_df: pd.DataFrame,
+    policy_tables: dict[str, pd.DataFrame],
+) -> pd.DataFrame:
+    plot_entries = _build_plot_entries(summary_df, policy_tables)
+    baseline_entry = next(
+        (entry for entry in plot_entries if entry["policy_name"] == BASELINE_POLICY_NAME),
+        None,
+    )
+    if baseline_entry is None:
+        raise ValueError(f"Baseline policy {BASELINE_POLICY_NAME} was not found in the evaluation tables.")
+
+    baseline_df = policy_tables[BASELINE_POLICY_NAME][["replication", "H"]].copy()
+    baseline_df = baseline_df.rename(columns={"H": "H_baseline"})
+
+    rows: list[dict] = []
+    for entry in plot_entries:
+        if entry["policy_name"] == BASELINE_POLICY_NAME:
+            continue
+
+        compare_df = pd.DataFrame(
+            {
+                "replication": policy_tables[entry["policy_name"]]["replication"].to_numpy(dtype=int),
+                "H_compare": entry["h_values"],
+            }
+        )
+        paired_df = baseline_df.merge(compare_df, on="replication", how="inner")
+        diff_values = paired_df["H_compare"].to_numpy(dtype=float) - paired_df["H_baseline"].to_numpy(dtype=float)
+
+        n = int(len(diff_values))
+        mean_diff = float(diff_values.mean())
+        std_diff = float(diff_values.std(ddof=1)) if n > 1 else 0.0
+        se_diff = std_diff / np.sqrt(n) if n > 0 else 0.0
+        ci_half_width = Z_VALUE_95 * se_diff
+        ci_lower = mean_diff - ci_half_width
+        ci_upper = mean_diff + ci_half_width
+
+        rows.append(
+            {
+                "baseline_policy": baseline_entry["label"],
+                "compared_policy": entry["label"],
+                "n_replications": n,
+                "mean_difference_H": mean_diff,
+                "std_difference_H": std_diff,
+                "SE_difference_H": se_diff,
+                "CI95_lower_difference_H": ci_lower,
+                "CI95_upper_difference_H": ci_upper,
+                "CI95_width_difference_H": 2.0 * ci_half_width,
+                "zero_in_CI": bool(ci_lower <= 0.0 <= ci_upper),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
 def main() -> None:
     policy_tables = _load_eval_tables()
     summary_df = _build_summary_table(policy_tables)
     summary_path = _save_summary_table(summary_df)
     box_plot_path = _save_box_plot(summary_df, policy_tables)
-    mean_ci_plot_path = _save_mean_ci_plot(summary_df)
+    mean_ci_plot_path = _save_mean_ci_plot(summary_df, policy_tables)
+    diff_df = pairwise_comparison(summary_df, policy_tables)
+    diff_path = _ensure_output_dir() / "pairwise_comparison.csv"
+    diff_df.to_csv(diff_path, index=False)
 
     display_df = summary_df.copy()
     for col in [
@@ -169,9 +272,23 @@ def main() -> None:
     ]:
         display_df[col] = display_df[col].round(4)
 
+    display_diff_df = diff_df.copy()
+    for col in [
+        "mean_difference_H",
+        "std_difference_H",
+        "SE_difference_H",
+        "CI95_lower_difference_H",
+        "CI95_upper_difference_H",
+        "CI95_width_difference_H",
+    ]:
+        display_diff_df[col] = display_diff_df[col].round(4)
+
     print("H Summary From evaluate_policy Folder:")
     print(display_df.to_string(index=False))
+    print("\nPaired H Difference Versus SAA - R1 (other policy minus SAA - R1):")
+    print(display_diff_df.to_string(index=False))
     print(f"\nSaved summary table to {summary_path}")
+    print(f"Saved pairwise comparison table to {diff_path}")
     print(f"Saved H box plot to {box_plot_path}")
     print(f"Saved H mean/CI plot to {mean_ci_plot_path}")
 
