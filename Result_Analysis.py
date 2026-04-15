@@ -11,6 +11,13 @@ EVALUATE_POLICY_DIR = Path("evaluate_policy")
 ANALYSIS_OUTPUT_DIR = Path("result_analysis_outputs")
 Z_VALUE_95 = 1.96
 BASELINE_POLICY_NAME = "R1_840a3320_SAA2"
+TITLE_FONT_SIZE = 18
+AXIS_LABEL_FONT_SIZE = 16
+TICK_LABEL_FONT_SIZE = 15
+SHOW_PLOTS = True
+Z1_NORMALIZER = 28.0
+Z2_NORMALIZER = 2.5
+Z3_NORMALIZER = 2.0
 MERGED_PLOT_GROUPS = [
     (
         ("R1_3d503d0e_Lin", "R1_c5d534fd_SubsetKN"),
@@ -42,6 +49,10 @@ def _policy_label(policy_name: str) -> str:
     method = _method_from_policy_name(policy_name)
     timetable = _timetable_from_policy_name(policy_name)
     return f"{method} - {timetable}"
+
+
+def _format_policy_tick_label(label: str) -> str:
+    return label.replace(" / ", " /\n").replace(" - ", "\n")
 
 
 def _load_eval_tables() -> dict[str, pd.DataFrame]:
@@ -147,14 +158,14 @@ def _save_box_plot(summary_df: pd.DataFrame, policy_tables: dict[str, pd.DataFra
 
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.boxplot(box_data, tick_labels=labels, patch_artist=True)
-    ax.set_xlabel("Policy")
-    ax.set_ylabel("Objective H")
-    ax.set_title("Box Plot of H Across 100 Replications")
-    ax.tick_params(axis="x", rotation=35)
+    ax.set_xlabel("Policy", fontsize=AXIS_LABEL_FONT_SIZE)
+    ax.set_ylabel("Objective H", fontsize=AXIS_LABEL_FONT_SIZE)
+    ax.set_title("Objective Value H Across 100 Replications", fontsize=TITLE_FONT_SIZE)
+    ax.tick_params(axis="x", labelsize=TICK_LABEL_FONT_SIZE)
+    ax.tick_params(axis="y", labelsize=TICK_LABEL_FONT_SIZE)
     ax.grid(axis="y", alpha=0.25)
     fig.tight_layout()
     fig.savefig(output_path, dpi=300)
-    plt.close(fig)
     return output_path
 
 
@@ -182,14 +193,45 @@ def _save_mean_ci_plot(summary_df: pd.DataFrame, policy_tables: dict[str, pd.Dat
         capsize=5,
     )
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=35, ha="right")
-    ax.set_xlabel("Policy")
-    ax.set_ylabel("Objective H")
-    ax.set_title("Mean H with 95% Confidence Intervals")
+    ax.set_xticklabels(labels, fontsize=TICK_LABEL_FONT_SIZE)
+    ax.set_xlabel("Policy", fontsize=AXIS_LABEL_FONT_SIZE)
+    ax.set_ylabel("Objective H", fontsize=AXIS_LABEL_FONT_SIZE)
+    ax.set_title("Mean Objective Value H with 95% Confidence Intervals", fontsize=TITLE_FONT_SIZE)
+    ax.tick_params(axis="y", labelsize=TICK_LABEL_FONT_SIZE)
     ax.grid(axis="y", alpha=0.25)
     fig.tight_layout()
     fig.savefig(output_path, dpi=300)
-    plt.close(fig)
+    return output_path
+
+
+def _save_normalized_z_bar_plot(summary_df: pd.DataFrame, policy_tables: dict[str, pd.DataFrame]) -> Path:
+    output_path = _ensure_output_dir() / "evaluate_policy_Z_normalized_bar.png"
+
+    plot_entries = _build_plot_entries(summary_df, policy_tables)
+    labels = [entry["label"] for entry in plot_entries]
+    tick_labels = [_format_policy_tick_label(label) for label in labels]
+    z1_values = np.array([float(entry["row"].mean_Z1) / Z1_NORMALIZER for entry in plot_entries], dtype=float)
+    z2_values = np.array([float(entry["row"].mean_Z2) / Z2_NORMALIZER for entry in plot_entries], dtype=float)
+    z3_values = np.array([float(entry["row"].mean_Z3) / Z3_NORMALIZER for entry in plot_entries], dtype=float)
+
+    x = np.arange(len(plot_entries))
+    width = 0.24
+
+    fig, ax = plt.subplots(figsize=(14, 8))
+    ax.bar(x - width, z1_values, width, label=f"Z1 / {Z1_NORMALIZER:g}")
+    ax.bar(x, z2_values, width, label=f"Z2 / {Z2_NORMALIZER:g}")
+    ax.bar(x + width, z3_values, width, label=f"Z3 / {Z3_NORMALIZER:g}")
+    ax.set_xticks(x)
+    ax.set_xticklabels(tick_labels, fontsize=TICK_LABEL_FONT_SIZE)
+    ax.tick_params(axis="x", labelsize=TICK_LABEL_FONT_SIZE, pad=8)
+    ax.set_xlabel("Policy", fontsize=AXIS_LABEL_FONT_SIZE)
+    ax.set_ylabel("Normalized Value", fontsize=AXIS_LABEL_FONT_SIZE)
+    ax.set_title("Normalized Comparison of Z1, Z2, and Z3 Across Policies", fontsize=TITLE_FONT_SIZE)
+    ax.tick_params(axis="y", labelsize=TICK_LABEL_FONT_SIZE)
+    ax.legend(fontsize=TICK_LABEL_FONT_SIZE - 1)
+    ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300)
     return output_path
 
 
@@ -254,6 +296,7 @@ def main() -> None:
     summary_path = _save_summary_table(summary_df)
     box_plot_path = _save_box_plot(summary_df, policy_tables)
     mean_ci_plot_path = _save_mean_ci_plot(summary_df, policy_tables)
+    normalized_z_plot_path = _save_normalized_z_bar_plot(summary_df, policy_tables)
     diff_df = pairwise_comparison(summary_df, policy_tables)
     diff_path = _ensure_output_dir() / "pairwise_comparison.csv"
     diff_df.to_csv(diff_path, index=False)
@@ -291,6 +334,10 @@ def main() -> None:
     print(f"Saved pairwise comparison table to {diff_path}")
     print(f"Saved H box plot to {box_plot_path}")
     print(f"Saved H mean/CI plot to {mean_ci_plot_path}")
+    print(f"Saved normalized Z bar plot to {normalized_z_plot_path}")
+    if SHOW_PLOTS:
+        plt.show()
+    plt.close("all")
 
 
 if __name__ == "__main__":
