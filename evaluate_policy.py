@@ -2,24 +2,18 @@
 Evaluate saved policies and export per-replication simulation results.
 
 Current behavior:
-    - If run with no arguments, the script evaluates the default six selected
-      policies (SAA2, KN+Subset, and Lin for R1/R2) using the current defaults.
-
-Usage examples:
-    # Run the default six-policy batch:
-    python evaluate_policy.py
+    - Running this file directly evaluates the policies listed in
+      selected_policy.json using the fixed validation settings defined below.
 """
 from __future__ import annotations
 
-import argparse
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from optimization_common import load_common_inputs, make_policy_name, resolve_timetable
+from optimization_common import load_common_inputs, resolve_timetable
 from simulation_model import (
     apply_feasibility_to_qik,
     policy_from_qik,
@@ -28,7 +22,7 @@ from simulation_model import (
 
 BASE_DIR = Path(__file__).resolve().parent
 
-# Output folders to search for policy name → Qik mapping
+# Output folders to search for policy-name-to-Qik mapping.
 OUTPUT_DIRS = [
     BASE_DIR / "optimization_subset_selection_kn_simplified_outputs5",
     BASE_DIR / "SAA2_output_folder",
@@ -36,14 +30,24 @@ OUTPUT_DIRS = [
 ]
 
 EVAL_OUTPUT_DIR = BASE_DIR / "evaluate_policy"
-DEFAULT_POLICY_NAMES = [
-    "R1_840a3320_SAA2",
-    "R2_7652d98c_SAA2",
-    "R1_c5d534fd_SubsetKN",
-    "R2_effc06e5_SubsetKN",
-    "R1_3d503d0e_Lin",
-    "R2_34b04524_Lin",
-]
+SELECTED_POLICY_PATH = BASE_DIR / "selected_policy.json"
+DEFAULT_REPS = 100
+DEFAULT_SEED = 20123
+DEFAULT_NUM_WEEKS = 180
+DEFAULT_WARMUP_WEEKS = 20
+
+
+def _load_selected_policy_names() -> list[str]:
+    with open(SELECTED_POLICY_PATH, encoding="utf-8") as f:
+        data = json.load(f)
+
+    if isinstance(data, dict):
+        policy_names = data.get("policy_names")
+    else:
+        policy_names = data
+
+    cleaned = [str(name).strip() for name in policy_names if str(name).strip()]
+    return cleaned
 
 
 def _search_qik_by_policy_name(policy_name: str) -> tuple[str, np.ndarray] | None:
@@ -106,31 +110,14 @@ def _search_qik_by_policy_name(policy_name: str) -> tuple[str, np.ndarray] | Non
     return None
 
 
-def _resolve_policy_inputs(
-    policy_name: str | None,
-    timetable_name: str | None,
-    qik_json: str | None,
-) -> tuple[str, str, np.ndarray]:
-    if qik_json is not None:
-        if timetable_name is None:
-            print("ERROR: --timetable is required when using --qik-json")
-            sys.exit(1)
-        resolved_timetable = timetable_name.strip().upper()
-        weekly_qik = np.array(json.loads(qik_json), dtype=int)
-        resolved_policy_name = policy_name or make_policy_name(resolved_timetable, "eval", weekly_qik)
-        return resolved_timetable, resolved_policy_name, weekly_qik
-
-    if policy_name is not None:
-        result = _search_qik_by_policy_name(policy_name)
-        if result is None:
-            print(f"ERROR: Could not find policy '{policy_name}' in any output folder.")
-            print("Searched:", [str(d) for d in OUTPUT_DIRS if d.exists()])
-            sys.exit(1)
-        resolved_timetable, weekly_qik = result
-        return resolved_timetable, policy_name, weekly_qik
-
-    print("ERROR: Provide either --policy-name or --qik-json")
-    sys.exit(1)
+def _resolve_default_policy(policy_name: str) -> tuple[str, np.ndarray]:
+    result = _search_qik_by_policy_name(policy_name)
+    if result is None:
+        raise FileNotFoundError(
+            f"Could not find policy '{policy_name}' in the expected output folders: "
+            f"{[str(d) for d in OUTPUT_DIRS if d.exists()]}"
+        )
+    return result
 
 
 def _evaluate_policy(
@@ -195,28 +182,26 @@ def _evaluate_policy(
     }
 
 
-def _run_default_policy_set(args, loaded_inputs) -> None:
-    print("No policy arguments provided. Running the default policy set:")
-    for name in DEFAULT_POLICY_NAMES:
+def _run_default_policy_set(loaded_inputs) -> None:
+    selected_policy_names = _load_selected_policy_names()
+
+    print(f"Running the selected policy set from {SELECTED_POLICY_PATH.name}:")
+    for name in selected_policy_names:
         print(f"  - {name}")
 
     results = []
     all_replications = []
-    for policy_name in DEFAULT_POLICY_NAMES:
-        timetable_name, resolved_policy_name, weekly_qik = _resolve_policy_inputs(
-            policy_name=policy_name,
-            timetable_name=None,
-            qik_json=None,
-        )
+    for policy_name in selected_policy_names:
+        timetable_name, weekly_qik = _resolve_default_policy(policy_name)
         result = _evaluate_policy(
-            policy_name=resolved_policy_name,
+            policy_name=policy_name,
             timetable_name=timetable_name,
             weekly_qik=weekly_qik,
             loaded_inputs=loaded_inputs,
-            reps=args.reps,
-            seed=args.seed,
-            num_weeks=args.num_weeks,
-            warmup_weeks=args.warmup_weeks,
+            reps=DEFAULT_REPS,
+            seed=DEFAULT_SEED,
+            num_weeks=DEFAULT_NUM_WEEKS,
+            warmup_weeks=DEFAULT_WARMUP_WEEKS,
         )
         results.append(result)
         all_replications.append(result["replications_df"])
@@ -226,10 +211,10 @@ def _run_default_policy_set(args, loaded_inputs) -> None:
             {
                 "policy_name": result["policy_name"],
                 "timetable": result["timetable"],
-                "reps": int(args.reps),
-                "seed": int(args.seed),
-                "num_weeks": int(args.num_weeks),
-                "warmup_weeks": int(args.warmup_weeks),
+                "reps": int(DEFAULT_REPS),
+                "seed": int(DEFAULT_SEED),
+                "num_weeks": int(DEFAULT_NUM_WEEKS),
+                "warmup_weeks": int(DEFAULT_WARMUP_WEEKS),
                 "mean_H": result["mean_H"],
                 "std_H": result["std_H"],
                 "mean_Z1": result["mean_Z1"],
@@ -254,37 +239,9 @@ def _run_default_policy_set(args, loaded_inputs) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate a policy by name or Qik JSON.")
-    parser.add_argument("--policy-name", default=None, help="Policy name to look up")
-    parser.add_argument("--timetable", default=None, help="Timetable (R1 or R2), required with --qik-json")
-    parser.add_argument("--qik-json", default=None, help="Weekly Qik as JSON 2x40 array")
-    parser.add_argument("--reps", type=int, default=100, help="Number of replications")
-    parser.add_argument("--seed", type=int, default=20123, help="Base seed")
-    parser.add_argument("--num-weeks", type=int, default=180, help="Simulation weeks")
-    parser.add_argument("--warmup-weeks", type=int, default=20, help="Warmup weeks")
-    args = parser.parse_args()
     loaded_inputs = load_common_inputs()
     EVAL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    if args.policy_name is None and args.qik_json is None:
-        _run_default_policy_set(args, loaded_inputs)
-        return
-
-    timetable_name, policy_name, weekly_qik = _resolve_policy_inputs(
-        policy_name=args.policy_name,
-        timetable_name=args.timetable,
-        qik_json=args.qik_json,
-    )
-    _evaluate_policy(
-        policy_name=policy_name,
-        timetable_name=timetable_name,
-        weekly_qik=weekly_qik,
-        loaded_inputs=loaded_inputs,
-        reps=args.reps,
-        seed=args.seed,
-        num_weeks=args.num_weeks,
-        warmup_weeks=args.warmup_weeks,
-    )
+    _run_default_policy_set(loaded_inputs)
 
 
 if __name__ == "__main__":
