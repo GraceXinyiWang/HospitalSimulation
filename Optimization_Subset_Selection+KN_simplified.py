@@ -16,7 +16,6 @@ within-day block to reduce the search space.
 """
 
 import math
-import os
 import time
 from pathlib import Path
 from dataclasses import dataclass
@@ -24,10 +23,6 @@ from functools import partial
 from itertools import islice, product
 import json
 
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -432,7 +427,7 @@ def kn_crn(k, alpha, n0, delta, seed, policy_indices=None):
 
     Ysum = Yn0.sum(axis=1)
     r = n0
-
+    ## I add tqdm for tracing the progress, as it takes too long to run the code
     with tqdm(
         total=k - 1,
         desc=_progress_desc("KN eliminations"),
@@ -448,7 +443,7 @@ def kn_crn(k, alpha, n0, delta, seed, policy_indices=None):
             # One extra CRN observation for each active system
             for i in II[Active]:
                 system_index = indices[i - 1]
-                Ysum[i - 1] += MySim(system_index, n=1, seed=seed + r - 1)
+                Ysum[i - 1] += MySim(system_index, n=1, seed=seed + r)
 
             for i in II[Active]:
                 for l in II[Active]:
@@ -550,51 +545,6 @@ def final_eval_table(policy_indices, subset_df, kn_df, num_replications, seed):
     )
 
 
-def _save_top_policy_plot(final_df: pd.DataFrame, filename: str) -> Path:
-    plot_df = final_df.sort_values(["subset_rank", "system"], ascending=[True, True], ignore_index=True).copy()
-    if plot_df.empty:
-        raise ValueError("Cannot plot an empty policy table.")
-
-    y_positions = np.arange(len(plot_df))
-    labels = [
-        f"{int(row.subset_rank)}. {row.policy}"
-        for row in plot_df.itertuples(index=False)
-    ]
-
-    fig_height = max(5.0, 0.65 * len(plot_df) + 1.5)
-    fig, ax = plt.subplots(figsize=(12, fig_height))
-
-    ax.barh(
-        y_positions,
-        plot_df["mean_H_eval"].to_numpy(dtype=float),
-        xerr=plot_df["std_H_eval"].to_numpy(dtype=float),
-        color="#4C78A8",
-        ecolor="#1F1F1F",
-        capsize=4,
-        alpha=0.9,
-        label="Mean ± std",
-    )
-    min_values = plot_df["min_H_eval"].to_numpy(dtype=float)
-    max_values = plot_df["max_H_eval"].to_numpy(dtype=float)
-    ax.hlines(y_positions, min_values, max_values, color="#E45756", linewidth=2, label="Min-Max range")
-    ax.scatter(min_values, y_positions, color="#E45756", s=20)
-    ax.scatter(max_values, y_positions, color="#E45756", s=20)
-
-    ax.set_yticks(y_positions)
-    ax.set_yticklabels(labels)
-    ax.invert_yaxis()
-    ax.set_xlabel("Final evaluation H")
-    ax.set_ylabel("Policy")
-    ax.set_title(f"{ACTIVE_TIMETABLE} top {len(plot_df)} policies after subset selection")
-    ax.grid(axis="x", alpha=0.25)
-    ax.legend(loc="lower right")
-
-    fig.tight_layout()
-    output_path = _ensure_output_dir() / filename
-    fig.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-    return output_path
-
 
 # =========================================================
 # MAIN
@@ -679,7 +629,8 @@ def _run_active_search():
         subset_df=subset_df,
         kn_df=result["summary"],
         num_replications=FINAL_EVAL_REPS,
-        seed=BASE_SEED + 20_000,
+        seed=BASE_SEED + 20_000,  
+        # I change another seed here to produce the eval table, this is consistent with all other three algorithm
     )
     final_eval_df.insert(
         len(final_eval_df.columns) - 2,
@@ -688,13 +639,8 @@ def _run_active_search():
     )
     final_csv_path = _save_csv(
         final_eval_df,
-        f"{ACTIVE_TIMETABLE.lower()}_final_policy_results.csv",
+        f"{ACTIVE_TIMETABLE.lower()}_subset_policy_results.csv",
     )
-    plot_path = _save_top_policy_plot(
-        final_eval_df.sort_values(["subset_rank", "system"], ascending=[True, True], ignore_index=True),
-        f"{ACTIVE_TIMETABLE.lower()}_top_{len(final_eval_df)}_subset_policies.png",
-    )
-
     best_row = final_eval_df.loc[final_eval_df["system"] == best_system].iloc[0]
     best_eval_mean_h = float(best_row["mean_H_eval"])
     best_eval_mean_z1 = float(best_row["mean_Z1_eval"])
@@ -720,7 +666,6 @@ def _run_active_search():
     print(f"Saved subset summary CSV: {subset_csv_path}")
     print(f"Saved KN summary CSV: {kn_csv_path}")
     print(f"Saved final policy results CSV: {final_csv_path}")
-    print(f"Saved top policy plot PNG: {plot_path}")
     elapsed_seconds = time.perf_counter() - run_start
     print(f"Elapsed runtime for {ACTIVE_TIMETABLE}: {elapsed_seconds:.2f} seconds")
 
@@ -737,7 +682,6 @@ def _run_active_search():
         "subset_csv_path": str(subset_csv_path),
         "kn_csv_path": str(kn_csv_path),
         "final_csv_path": str(final_csv_path),
-        "plot_path": str(plot_path),
         "elapsed_seconds": elapsed_seconds,
     }
 
@@ -772,7 +716,6 @@ def main():
                 "subset_csv_path": item["subset_csv_path"],
                 "kn_csv_path": item["kn_csv_path"],
                 "final_csv_path": item["final_csv_path"],
-                "plot_path": item["plot_path"],
             }
             for item in all_results
         ]
@@ -784,11 +727,11 @@ def main():
 
     comparison_csv_path = _save_csv(
         comparison_df,
-        "overall_timetable_comparison.csv",
+        "overall_timetable_final_comparison.csv",
     )
     combined_final_csv_path = _save_csv(
         pd.concat([item["final_results_df"] for item in all_results], ignore_index=True),
-        "all_timetables_final_policy_results.csv",
+        "R1_R2_timetables_policy_results_subset.csv",
     )
 
     best_timetable = str(comparison_df.iloc[0]["timetable"])

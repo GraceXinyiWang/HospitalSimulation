@@ -70,6 +70,17 @@ MINUTES_PER_DAY = 24.0 * 60.0
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "optimization_lin_stage2_outputs"
 
+# ---------------------------------------------------------------------------
+# Default initial points from SubsetKN best results (best known H).
+# ---------------------------------------------------------------------------
+_SUBSETKN_R1_DAILY = [0, 2, 0, 1, 2, 1, 2, 1]   # best KN for R1, H≈0.95
+_SUBSETKN_R2_DAILY = [0, 2, 0, 2, 2, 1, 2, 0]   # best KN for R2, H≈1.05
+
+DEFAULT_INITIAL_QIKS: dict[str, np.ndarray] = {
+    "R1": np.array([_SUBSETKN_R1_DAILY * 5, _SUBSETKN_R1_DAILY * 5], dtype=int),
+    "R2": np.array([_SUBSETKN_R2_DAILY * 5, _SUBSETKN_R2_DAILY * 5], dtype=int),
+}
+
 
 @dataclass
 class Stage2Config:
@@ -538,19 +549,29 @@ def optimize_timetable(
     search_timetable: str,
     loaded_inputs: LoadedIRInputs,
     config: Stage2Config,
+    custom_initial_qik: np.ndarray | None = None,
 ) -> dict:
     timetable = _resolve_timetable(search_timetable)
     timetable.name = str(search_timetable).upper()
 
-    initial_qik = build_initial_qik(
-        timetable=timetable,
-        class_totals=target_weekly_class_totals(timetable, loaded_inputs, config),
-        max_q_per_block=config.max_q_per_block,
-        initialization_mode=config.initialization_mode,
-    )
+    if custom_initial_qik is not None:
+        initial_qik = apply_feasibility_to_qik(
+            np.asarray(custom_initial_qik, dtype=int), timetable
+        )
+    elif timetable.name in DEFAULT_INITIAL_QIKS:
+        initial_qik = apply_feasibility_to_qik(
+            DEFAULT_INITIAL_QIKS[timetable.name].copy(), timetable
+        )
+    else:
+        initial_qik = build_initial_qik(
+            timetable=timetable,
+            class_totals=target_weekly_class_totals(timetable, loaded_inputs, config),
+            max_q_per_block=config.max_q_per_block,
+            initialization_mode=config.initialization_mode,
+        )
     class_totals = initial_qik.sum(axis=1).astype(int)
 
-    search_seed = int(config.base_seed) + (0 if timetable.name == "R1" else 10_000)
+    search_seed = int(config.base_seed)
     rng = np.random.default_rng(search_seed)
 
     best_eval = evaluate_schedule(
@@ -649,7 +670,9 @@ def optimize_timetable(
         num_weeks=int(config.num_weeks),
         loaded_inputs=loaded_inputs,
         policy=policy_from_qik(best_eval.qik, timetable),
-        base_seed=search_seed + 50_000,
+        base_seed=search_seed + 20_000,
+        # The final validation seed is changed so the final performance is independent of the 
+        # random sample that was used to choose the policy.
         warmup_weeks=int(config.warmup_weeks),
     )
 
@@ -756,6 +779,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--initialization-mode", default="all_ones", help="all_ones or demand_balanced")
     parser.add_argument("--base-seed", type=int, default=123)
     parser.add_argument("--restart-after", type=int, default=3)
+    parser.add_argument(
+        "--initial-qik-json", default=None,
+        help='JSON string for a custom 2x40 initial Qik, e.g. \'[[0,1,...],[0,2,...]]\'',
+    )
     return parser.parse_args()
 
 
@@ -777,7 +804,12 @@ def main() -> None:
     )
 
     loaded_inputs = load_common_inputs()
-   
+
+    # Parse optional custom initial Qik from CLI
+    cli_initial_qik = None
+    if args.initial_qik_json is not None:
+        cli_initial_qik = np.asarray(json.loads(args.initial_qik_json), dtype=int)
+
     all_results = []
     for search_timetable in _resolve_search_list(args.timetable):
         print("\n" + "=" * 80)
@@ -788,6 +820,7 @@ def main() -> None:
             search_timetable=search_timetable,
             loaded_inputs=loaded_inputs,
             config=config,
+            custom_initial_qik=cli_initial_qik,
         )
         result["total_run_time"] = time.perf_counter() - tt_start
         paths = save_result(result, config)
@@ -796,7 +829,7 @@ def main() -> None:
         all_results.append(summary_row)
 
         print(f"Policy name = {result['policy_name']}")
-        print(f"Target weekly class totals = {np.asarray(result['class_totals'], dtype=int).tolist()}")
+        print(f"Weekly class totals = {np.asarray(result['class_totals'], dtype=int).tolist()}")
         print(
             f"Search best mean H = {summary_row['search_mean_H']:.4f} "
             f"(rel half-width {summary_row['search_rel_half_width']:.4f}, "
@@ -806,6 +839,9 @@ def main() -> None:
             f"Final evaluation mean H = {summary_row['final_mean_H']:.4f} "
             f"+/- {summary_row['final_std_H']:.4f}"
         )
+        print(f"  Z1={summary_row['final_mean_Z1_days']:.4f} days, "
+              f"Z2={summary_row['final_mean_Z2_hours']:.4f} hrs, "
+              f"Z3={summary_row['final_mean_Z3']:.2f}")
         print(f"Saved history to {paths['history_path']}")
         print(f"Saved initial Qik to {paths['initial_qik_path']}")
         print(f"Saved best Qik to {paths['qik_path']}")
@@ -815,10 +851,10 @@ def main() -> None:
         print(result["initial_qik_df"].to_string(index=False))
         print("\nBest weekly Qik")
         print(result["best_qik_df"].to_string(index=False))
-    
+
     end_time = time.perf_counter()
     elapsed = end_time - start_time
-    print(f"Running time: {elapsed:.6f} seconds")
+    print(f"\nTotal running time: {elapsed:.6f} seconds")
 
     if all_results:
         summary_df = pd.DataFrame(all_results).sort_values(

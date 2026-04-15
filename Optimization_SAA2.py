@@ -1,14 +1,15 @@
 from __future__ import annotations
 import time
 """
-Improved SAA for the hospital Qik optimization problem.
+LP-style SAA approximation for the hospital Qik optimization problem.
 
-Key improvements over Optimization_SAA.py:
-1. Wait objective uses per-patient expected wait in days (matching Z1).
-2. Overtime constraint accounts for the lunch break (12-13).
-3. Multiple rounding strategies from the LP relaxation are evaluated
-   via short simulation runs to pick the best integer solution.
-4. More SAA scenarios for better demand representation.
+This is not the exact simulation objective. It builds a deterministic-equivalent
+linear approximation:
+
+1. Sample demand scenarios from the fitted arrival/prep models.
+2. Approximate booking delay by linear backlog variables.
+3. Approximate overtime and congestion by linear surrogate variables.
+4. Solve the LP, round Qik, then validate the rounded policy in simulation.
 """
 
 from dataclasses import dataclass
@@ -551,7 +552,7 @@ def solve_saa2(
         print(f"Screening candidates with {screening_replications} replications each...")
         screen_results = _screen_candidates(
             candidates, timetable_name, policy_space,
-            screening_replications, seed + 10_000,
+            screening_replications, seed,
         )
 
         # Pick best by screening mean H
@@ -567,7 +568,8 @@ def solve_saa2(
         print(f"Validating best candidate with {validation_replications} replications...")
         val = _validate_policy(
             best_weekly_qik, timetable_name, policy_space,
-            validation_replications, seed + 20_000,
+            validation_replications, seed + 20_000, 
+            #Similar as subset+KN, I changed another seed to evaluate the final output
         )
 
         policy_name = make_policy_name(timetable_name, "SAA2", best_weekly_qik)
